@@ -26,6 +26,7 @@ from tkinter import (
 )
 from typing import Callable, Iterable
 
+import xlrd
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -34,7 +35,7 @@ DEFAULT_CELL_ADDRESSES = [
     "A2", "C2", "A3", "C3",
 ]
 VALID_CELL_RE = re.compile(r"^[A-Z]{1,3}[1-9][0-9]*$")
-WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
+WORKBOOK_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
 
 
 @dataclass
@@ -87,7 +88,7 @@ def is_source_workbook(path: Path, summary_name: str = "汇总") -> bool:
 def find_workbooks(path: Path, source_mode: str, summary_name: str) -> list[Path]:
     if source_mode == "file":
         if not path.is_file() or not is_source_workbook(path, summary_name):
-            raise ValueError("请选择有效的 .xlsx 或 .xlsm 文件。")
+            raise ValueError("请选择有效的 .xls、.xlsx 或 .xlsm 文件。")
         return [path]
 
     if not path.is_dir():
@@ -98,8 +99,74 @@ def find_workbooks(path: Path, source_mode: str, summary_name: str) -> list[Path
         if item.is_file() and is_source_workbook(item, summary_name)
     )
     if not files:
-        raise ValueError("所选文件夹中没有可处理的 .xlsx 或 .xlsm 文件。")
+        raise ValueError(
+            "所选文件夹中没有可处理的 .xls、.xlsx 或 .xlsm 文件。"
+        )
     return files
+
+
+def split_cell_address(address: str) -> tuple[int, int]:
+    match = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]*)", address)
+    if not match:
+        raise ValueError(f"单元格地址不合法：{address}")
+    return int(match.group(2)) - 1, column_letters_to_number(match.group(1)) - 1
+
+
+def xls_cell_value(book, cell):
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        return xlrd.xldate.xldate_as_datetime(cell.value, book.datemode)
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return bool(cell.value)
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+        return None
+    return cell.value
+
+
+def xls_number_format(book, cell) -> str:
+    try:
+        xf = book.xf_list[cell.xf_index]
+        return book.format_map[xf.format_key].format_str or "General"
+    except (AttributeError, IndexError, KeyError):
+        return "General"
+
+
+def read_xls_records(
+    source_path: Path,
+    addresses: list[str],
+    summary_name: str,
+) -> list[SummaryRecord]:
+    book = xlrd.open_workbook(
+        source_path,
+        formatting_info=True,
+        on_demand=True,
+    )
+    records: list[SummaryRecord] = []
+    try:
+        for sheet in book.sheets():
+            if sheet.name == summary_name:
+                continue
+            values: list[object] = []
+            number_formats: list[str] = []
+            for address in addresses:
+                row, column = split_cell_address(address)
+                if row >= sheet.nrows or column >= sheet.ncols:
+                    values.append(None)
+                    number_formats.append("General")
+                    continue
+                cell = sheet.cell(row, column)
+                values.append(xls_cell_value(book, cell))
+                number_formats.append(xls_number_format(book, cell))
+            records.append(
+                SummaryRecord(
+                    file_name=source_path.name,
+                    sheet_name=sheet.name,
+                    values=values,
+                    number_formats=number_formats,
+                )
+            )
+    finally:
+        book.release_resources()
+    return records
 
 
 def read_records(
@@ -107,6 +174,9 @@ def read_records(
     addresses: list[str],
     summary_name: str,
 ) -> list[SummaryRecord]:
+    if source_path.suffix.lower() == ".xls":
+        return read_xls_records(source_path, addresses, summary_name)
+
     keep_vba = source_path.suffix.lower() == ".xlsm"
     value_book = load_workbook(
         source_path,
@@ -265,6 +335,34 @@ def unique_output_path(path: Path) -> Path:
         index += 1
 
 
+def copy_xls_to_xlsx(source_path: Path):
+    source_book = xlrd.open_workbook(
+        source_path,
+        formatting_info=True,
+        on_demand=True,
+    )
+    output_book = Workbook()
+    output_book.remove(output_book.active)
+    try:
+        for source_sheet in source_book.sheets():
+            output_sheet = output_book.create_sheet(source_sheet.name)
+            for row_index in range(source_sheet.nrows):
+                for column_index in range(source_sheet.ncols):
+                    source_cell = source_sheet.cell(row_index, column_index)
+                    target_cell = output_sheet.cell(
+                        row=row_index + 1,
+                        column=column_index + 1,
+                        value=xls_cell_value(source_book, source_cell),
+                    )
+                    target_cell.number_format = xls_number_format(
+                        source_book,
+                        source_cell,
+                    )
+    finally:
+        source_book.release_resources()
+    return output_book
+
+
 def create_summary_copy(
     source_path: Path,
     addresses: list[str],
@@ -272,8 +370,11 @@ def create_summary_copy(
     output_path: Path,
 ) -> Path:
     records = read_records(source_path, addresses, summary_name)
-    keep_vba = source_path.suffix.lower() == ".xlsm"
-    workbook = load_workbook(source_path, keep_vba=keep_vba)
+    if source_path.suffix.lower() == ".xls":
+        workbook = copy_xls_to_xlsx(source_path)
+    else:
+        keep_vba = source_path.suffix.lower() == ".xlsm"
+        workbook = load_workbook(source_path, keep_vba=keep_vba)
 
     actual_name = unique_sheet_name(workbook, summary_name)
     summary_sheet = workbook.create_sheet(actual_name, 0)
@@ -301,8 +402,13 @@ def create_summary_copies(
     for index, source_path in enumerate(source_files, start=1):
         if progress:
             progress(index - 1, total, f"正在处理：{source_path.name}")
+        copy_name = (
+            f"{source_path.stem}.xlsx"
+            if source_path.suffix.lower() == ".xls"
+            else source_path.name
+        )
         proposed = (
-            output_target / source_path.name
+            output_target / copy_name
             if len(source_files) > 1
             else output_target
         )
@@ -327,8 +433,13 @@ def default_output_path(source_path: Path, source_mode: str) -> Path:
 
 def default_copy_target(source_path: Path, source_mode: str) -> Path:
     if source_mode == "file":
+        suffix = (
+            ".xlsx"
+            if source_path.suffix.lower() == ".xls"
+            else source_path.suffix
+        )
         return source_path.with_name(
-            f"{source_path.stem}_已汇总{source_path.suffix}"
+            f"{source_path.stem}_已汇总{suffix}"
         )
     return source_path / "汇总结果"
 
@@ -737,7 +848,7 @@ class SummaryApp:
         self.source_choice = StringVar(value="选择一个表格文件")
         self.source_path = StringVar()
         self.source_summary = StringVar(value="尚未选择数据来源")
-        self.output_choice = StringVar(value="把所有结果合并到一个新文件")
+        self.output_choice = StringVar(value="合并全部数据，生成一个汇总文件")
         self.output_path = StringVar()
         self.summary_name = StringVar(value="汇总")
         self.selection_summary = StringVar()
@@ -844,8 +955,8 @@ class SummaryApp:
             output_selector,
             textvariable=self.output_choice,
             values=(
-                "把所有结果合并到一个新文件",
-                "为每个源文件生成带汇总页的副本",
+                "合并全部数据，生成一个汇总文件",
+                "分别生成副本，每个副本添加汇总页",
             ),
             state="readonly",
             width=30,
@@ -939,7 +1050,7 @@ class SummaryApp:
             if not is_source_workbook(selected, self.summary_name.get()):
                 messagebox.showerror(
                     "文件无效",
-                    "请选择有效的 .xlsx 或 .xlsm 文件。",
+                    "请选择有效的 .xls、.xlsx 或 .xlsm 文件。",
                     parent=self.root,
                 )
                 return
@@ -993,7 +1104,7 @@ class SummaryApp:
         selected = filedialog.askopenfilename(
             title="选择 Excel 文件",
             filetypes=[
-                ("Excel 文件", "*.xlsx *.xlsm"),
+                ("Excel 文件", "*.xls *.xlsx *.xlsm"),
                 ("所有文件", "*.*"),
             ],
         )
@@ -1038,7 +1149,7 @@ class SummaryApp:
         source_path = Path(self.source_path.get())
         default_path = (
             default_output_path(source_path, self.source_mode)
-            if self.output_choice.get() == "把所有结果合并到一个新文件"
+            if self.output_choice.get() == "合并全部数据，生成一个汇总文件"
             else default_copy_target(source_path, self.source_mode)
         )
         self.output_path.set(str(default_path))
@@ -1047,7 +1158,7 @@ class SummaryApp:
 
     def _browse_output(self) -> None:
         if (
-            self.output_choice.get() == "为每个源文件生成带汇总页的副本"
+            self.output_choice.get() == "分别生成副本，每个副本添加汇总页"
             and self.source_mode == "folder"
         ):
             selected = filedialog.askdirectory(
@@ -1056,8 +1167,12 @@ class SummaryApp:
         else:
             current = Path(self.output_path.get() or "汇总表.xlsx")
             suffix = (
-                Path(self.source_path.get()).suffix
-                if self.output_choice.get() == "为每个源文件生成带汇总页的副本"
+                (
+                    ".xlsx"
+                    if Path(self.source_path.get()).suffix.lower() == ".xls"
+                    else Path(self.source_path.get()).suffix
+                )
+                if self.output_choice.get() == "分别生成副本，每个副本添加汇总页"
                 else ".xlsx"
             )
             selected = filedialog.asksaveasfilename(
@@ -1078,7 +1193,7 @@ class SummaryApp:
             source_path = Path(self.source_path.get())
             default_path = (
                 default_output_path(source_path, self.source_mode)
-                if self.output_choice.get() == "把所有结果合并到一个新文件"
+                if self.output_choice.get() == "合并全部数据，生成一个汇总文件"
                 else default_copy_target(source_path, self.source_mode)
             )
             self.output_path.set(str(default_path))
@@ -1094,7 +1209,7 @@ class SummaryApp:
         location_label = (
             "输出文件夹："
             if (
-                self.output_choice.get() == "为每个源文件生成带汇总页的副本"
+                self.output_choice.get() == "分别生成副本，每个副本添加汇总页"
                 and self.source_mode == "folder"
             )
             else "输出文件："
@@ -1112,7 +1227,7 @@ class SummaryApp:
             command=self._browse_output,
         ).pack(side=LEFT, padx=(6, 0))
 
-        if self.output_choice.get() == "为每个源文件生成带汇总页的副本":
+        if self.output_choice.get() == "分别生成副本，每个副本添加汇总页":
             name_row = ttk.Frame(self.output_fields)
             name_row.pack(fill=X, pady=(6, 0))
             ttk.Label(name_row, text="表单名称：").pack(side=LEFT)
@@ -1192,7 +1307,7 @@ class SummaryApp:
             and self.cells_valid
         )
         valid = valid and bool(self.output_path.get().strip())
-        if self.output_choice.get() == "为每个源文件生成带汇总页的副本":
+        if self.output_choice.get() == "分别生成副本，每个副本添加汇总页":
             valid = valid and bool(self.summary_name.get().strip())
         self.start_button.configure(state="normal" if valid else "disabled")
 
@@ -1214,7 +1329,7 @@ class SummaryApp:
             self._reset_progress()
             summary_name = (
                 "汇总"
-                if self.output_choice.get() == "把所有结果合并到一个新文件"
+                if self.output_choice.get() == "合并全部数据，生成一个汇总文件"
                 else self.summary_name.get().strip()
             )
             if not summary_name:
@@ -1237,7 +1352,7 @@ class SummaryApp:
                 raise ValueError("请选择输出位置。")
             output_target = Path(output_text)
 
-            if self.output_choice.get() == "把所有结果合并到一个新文件":
+            if self.output_choice.get() == "合并全部数据，生成一个汇总文件":
                 output_path = output_target
                 if output_path.resolve() in {
                     path.resolve() for path in source_files
