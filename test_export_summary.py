@@ -61,6 +61,8 @@ class ExportSummaryTests(unittest.TestCase):
             self.assertEqual(sheet["B1"].value, "Sheet名称")
             self.assertEqual(sheet["C2"].value, 101.25)
             self.assertEqual(sheet["C2"].number_format, "0")
+            self.assertEqual(sheet["A1"].border.left.style, "thin")
+            self.assertEqual(sheet["D5"].border.bottom.style, "thin")
             workbook.close()
 
     def test_create_copy_with_summary_as_first_sheet(self) -> None:
@@ -86,6 +88,13 @@ class ExportSummaryTests(unittest.TestCase):
             self.assertEqual(copied["汇总"]["B2"].number_format, "0")
             copied.close()
 
+    def test_default_cell_addresses(self) -> None:
+        self.assertEqual(
+            export_summary.DEFAULT_CELL_ADDRESSES,
+            ["A2", "C2", "A3", "C3"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+
