@@ -848,7 +848,9 @@ class SummaryApp:
         self.source_choice = StringVar(value="选择一个表格文件")
         self.source_path = StringVar()
         self.source_summary = StringVar(value="尚未选择数据来源")
-        self.output_choice = StringVar(value="合并全部数据，生成一个汇总文件")
+        self.output_choice = StringVar(
+            value="创建新的汇总文件，集中提取指定单元格数据"
+        )
         self.output_path = StringVar()
         self.summary_name = StringVar(value="汇总")
         self.selection_summary = StringVar()
@@ -955,8 +957,8 @@ class SummaryApp:
             output_selector,
             textvariable=self.output_choice,
             values=(
-                "合并全部数据，生成一个汇总文件",
-                "分别生成副本，每个副本添加汇总页",
+                "创建新的汇总文件，集中提取指定单元格数据",
+                "另存为工作簿副本，在首页插入汇总工作表",
             ),
             state="readonly",
             width=30,
@@ -1149,7 +1151,8 @@ class SummaryApp:
         source_path = Path(self.source_path.get())
         default_path = (
             default_output_path(source_path, self.source_mode)
-            if self.output_choice.get() == "合并全部数据，生成一个汇总文件"
+            if self.output_choice.get()
+            == "创建新的汇总文件，集中提取指定单元格数据"
             else default_copy_target(source_path, self.source_mode)
         )
         self.output_path.set(str(default_path))
@@ -1158,7 +1161,8 @@ class SummaryApp:
 
     def _browse_output(self) -> None:
         if (
-            self.output_choice.get() == "分别生成副本，每个副本添加汇总页"
+            self.output_choice.get()
+            == "另存为工作簿副本，在首页插入汇总工作表"
             and self.source_mode == "folder"
         ):
             selected = filedialog.askdirectory(
@@ -1172,7 +1176,8 @@ class SummaryApp:
                     if Path(self.source_path.get()).suffix.lower() == ".xls"
                     else Path(self.source_path.get()).suffix
                 )
-                if self.output_choice.get() == "分别生成副本，每个副本添加汇总页"
+                if self.output_choice.get()
+                == "另存为工作簿副本，在首页插入汇总工作表"
                 else ".xlsx"
             )
             selected = filedialog.asksaveasfilename(
@@ -1193,7 +1198,8 @@ class SummaryApp:
             source_path = Path(self.source_path.get())
             default_path = (
                 default_output_path(source_path, self.source_mode)
-                if self.output_choice.get() == "合并全部数据，生成一个汇总文件"
+                if self.output_choice.get()
+                == "创建新的汇总文件，集中提取指定单元格数据"
                 else default_copy_target(source_path, self.source_mode)
             )
             self.output_path.set(str(default_path))
@@ -1209,7 +1215,8 @@ class SummaryApp:
         location_label = (
             "输出文件夹："
             if (
-                self.output_choice.get() == "分别生成副本，每个副本添加汇总页"
+                self.output_choice.get()
+                == "另存为工作簿副本，在首页插入汇总工作表"
                 and self.source_mode == "folder"
             )
             else "输出文件："
@@ -1227,7 +1234,10 @@ class SummaryApp:
             command=self._browse_output,
         ).pack(side=LEFT, padx=(6, 0))
 
-        if self.output_choice.get() == "分别生成副本，每个副本添加汇总页":
+        if (
+            self.output_choice.get()
+            == "另存为工作簿副本，在首页插入汇总工作表"
+        ):
             name_row = ttk.Frame(self.output_fields)
             name_row.pack(fill=X, pady=(6, 0))
             ttk.Label(name_row, text="表单名称：").pack(side=LEFT)
@@ -1307,7 +1317,10 @@ class SummaryApp:
             and self.cells_valid
         )
         valid = valid and bool(self.output_path.get().strip())
-        if self.output_choice.get() == "分别生成副本，每个副本添加汇总页":
+        if (
+            self.output_choice.get()
+            == "另存为工作簿副本，在首页插入汇总工作表"
+        ):
             valid = valid and bool(self.summary_name.get().strip())
         self.start_button.configure(state="normal" if valid else "disabled")
 
@@ -1329,7 +1342,8 @@ class SummaryApp:
             self._reset_progress()
             summary_name = (
                 "汇总"
-                if self.output_choice.get() == "合并全部数据，生成一个汇总文件"
+                if self.output_choice.get()
+                == "创建新的汇总文件，集中提取指定单元格数据"
                 else self.summary_name.get().strip()
             )
             if not summary_name:
@@ -1352,7 +1366,10 @@ class SummaryApp:
                 raise ValueError("请选择输出位置。")
             output_target = Path(output_text)
 
-            if self.output_choice.get() == "合并全部数据，生成一个汇总文件":
+            if (
+                self.output_choice.get()
+                == "创建新的汇总文件，集中提取指定单元格数据"
+            ):
                 output_path = output_target
                 if output_path.resolve() in {
                     path.resolve() for path in source_files
