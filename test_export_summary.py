@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from openpyxl import Workbook, load_workbook
+import xlwt
 
 import export_summary
 
@@ -18,6 +19,17 @@ def make_source(path: Path, marker: int) -> None:
         sheet["J8"] = marker + index + 0.75
         sheet["J8"].number_format = "0"
     workbook.save(path)
+
+
+def make_xls_source(path: Path) -> None:
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("旧版数据")
+    integer_style = xlwt.easyxf(num_format_str="0")
+    sheet.write(1, 0, 12.6, integer_style)
+    sheet.write(1, 2, 34.4, integer_style)
+    sheet.write(2, 0, 56.5, integer_style)
+    sheet.write(2, 2, 78.2, integer_style)
+    workbook.save(str(path))
 
 
 class ExportSummaryTests(unittest.TestCase):
@@ -93,6 +105,34 @@ class ExportSummaryTests(unittest.TestCase):
             export_summary.DEFAULT_CELL_ADDRESSES,
             ["A2", "C2", "A3", "C3"],
         )
+
+    def test_xls_source_and_xlsx_copy(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            source = folder / "旧版.xls"
+            copy_path = folder / "旧版_已汇总.xlsx"
+            make_xls_source(source)
+
+            records = export_summary.read_records(
+                source,
+                export_summary.DEFAULT_CELL_ADDRESSES,
+                "汇总",
+            )
+            self.assertEqual(records[0].values, [12.6, 34.4, 56.5, 78.2])
+            self.assertEqual(records[0].number_formats, ["0", "0", "0", "0"])
+
+            export_summary.create_summary_copy(
+                source,
+                export_summary.DEFAULT_CELL_ADDRESSES,
+                "汇总",
+                copy_path,
+            )
+            self.assertTrue(source.exists())
+            copied = load_workbook(copy_path)
+            self.assertEqual(copied.sheetnames[0], "汇总")
+            self.assertEqual(copied["汇总"]["B2"].value, 12.6)
+            self.assertEqual(copied["汇总"]["B2"].number_format, "0")
+            copied.close()
 
 
 if __name__ == "__main__":
