@@ -734,6 +734,7 @@ class SummaryApp:
         self.root.minsize(820, 560)
 
         self.source_mode = ""
+        self.source_choice = StringVar(value="选择一个表格文件")
         self.source_path = StringVar()
         self.source_summary = StringVar(value="尚未选择数据来源")
         self.output_choice = StringVar(value="把所有结果合并到一个新文件")
@@ -806,15 +807,22 @@ class SummaryApp:
 
         source_actions = ttk.Frame(source_frame)
         source_actions.pack(fill=X)
+        source_combo = ttk.Combobox(
+            source_actions,
+            textvariable=self.source_choice,
+            values=("选择一个表格文件", "选择文件夹中的所有表格"),
+            state="readonly",
+            width=24,
+        )
+        source_combo.pack(side=LEFT, fill=X, expand=True)
+        source_combo.bind(
+            "<<ComboboxSelected>>",
+            self._source_choice_changed,
+        )
         ttk.Button(
             source_actions,
-            text="选择表格文件...",
-            command=self._choose_file,
-        ).pack(side=LEFT)
-        ttk.Button(
-            source_actions,
-            text="选择文件夹...",
-            command=self._choose_folder,
+            text="浏览...",
+            command=self._browse_selected_source,
         ).pack(side=LEFT, padx=(8, 0))
         ttk.Label(
             source_frame,
@@ -966,6 +974,20 @@ class SummaryApp:
             f"已选择文件夹：{selected}（共 {len(files)} 个 Excel 文件）"
         )
         self._source_changed()
+
+    def _browse_selected_source(self) -> None:
+        if self.source_choice.get() == "选择文件夹中的所有表格":
+            self._choose_folder()
+        else:
+            self._choose_file()
+
+    def _source_choice_changed(self, _event=None) -> None:
+        self.source_mode = ""
+        self.source_path.set("")
+        self.output_path.set("")
+        self.source_summary.set("尚未选择数据来源")
+        self._show_output_fields()
+        self._configuration_changed()
 
     def _choose_file(self) -> None:
         selected = filedialog.askopenfilename(
