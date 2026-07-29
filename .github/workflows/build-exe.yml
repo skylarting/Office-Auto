@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install pyinstaller openpyxl
+        run: python -m pip install pyinstaller openpyxl xlrd xlwt
 
       - name: Run tests
         run: python -m unittest -v
@@ -43,3 +43,4 @@ jobs:
           name: ExcelSummary-Windows
           path: dist/ExcelSummary.exe
           if-no-files-found: error
+
