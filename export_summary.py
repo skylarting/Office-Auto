@@ -804,11 +804,18 @@ class SummaryApp:
         )
         source_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
+        source_actions = ttk.Frame(source_frame)
+        source_actions.pack(fill=X)
         ttk.Button(
-            source_frame,
-            text="浏览...",
-            command=self._browse_source,
-        ).pack(anchor=W)
+            source_actions,
+            text="选择表格文件...",
+            command=self._choose_file,
+        ).pack(side=LEFT)
+        ttk.Button(
+            source_actions,
+            text="选择文件夹...",
+            command=self._choose_folder,
+        ).pack(side=LEFT, padx=(8, 0))
         ttk.Label(
             source_frame,
             textvariable=self.source_summary,
@@ -848,16 +855,6 @@ class SummaryApp:
             cell_header,
             text="2. 选择需要提取的单元格",
         ).pack(side=LEFT)
-        ttk.Button(
-            cell_header,
-            text="恢复默认",
-            command=self._restore_default_cells,
-        ).pack(side=RIGHT)
-        ttk.Button(
-            cell_header,
-            text="清空",
-            command=self._clear_cells,
-        ).pack(side=RIGHT, padx=(0, 6))
 
         cell_frame = ttk.LabelFrame(cell_section, padding=10)
         cell_frame.pack(fill=BOTH, expand=True)
@@ -869,10 +866,22 @@ class SummaryApp:
         self.cell_notebook.add(manual_tab, text="手动输入")
         self.cell_notebook.add(visual_tab, text="点击选择")
 
+        manual_toolbar = ttk.Frame(manual_tab)
+        manual_toolbar.pack(fill=X)
         ttk.Label(
-            manual_tab,
-            text="可用逗号、空格或换行分隔，例如：I8, J8, L8, I17",
-        ).pack(anchor=W)
+            manual_toolbar,
+            text="可用逗号、空格或换行分隔，例如：A2, C2, A3, C3",
+        ).pack(side=LEFT)
+        ttk.Button(
+            manual_toolbar,
+            text="恢复默认",
+            command=self._restore_default_cells,
+        ).pack(side=RIGHT)
+        ttk.Button(
+            manual_toolbar,
+            text="清空",
+            command=self._clear_cells,
+        ).pack(side=RIGHT, padx=(0, 6))
         self.cell_text = Text(manual_tab, height=4, wrap="word")
         self.cell_text.pack(fill=X, pady=(8, 6))
         self.cell_text.bind("<KeyRelease>", self._manual_cells_changed)
@@ -886,12 +895,24 @@ class SummaryApp:
             textvariable=self.selection_summary,
         ).pack(anchor=W, pady=(8, 0))
 
+        visual_toolbar = ttk.Frame(visual_tab)
+        visual_toolbar.pack(fill=X, pady=(0, 8))
         ttk.Label(
-            visual_tab,
+            visual_toolbar,
             textvariable=self.selection_details,
-            wraplength=790,
+            wraplength=610,
             justify=LEFT,
-        ).pack(fill=X, anchor=W, pady=(0, 8))
+        ).pack(side=LEFT, fill=X, expand=True)
+        ttk.Button(
+            visual_toolbar,
+            text="恢复默认",
+            command=self._restore_default_cells,
+        ).pack(side=RIGHT)
+        ttk.Button(
+            visual_toolbar,
+            text="清空",
+            command=self._clear_cells,
+        ).pack(side=RIGHT, padx=(0, 6))
         self.cell_grid = CellGridPicker(
             visual_tab,
             self._grid_cells_changed,
