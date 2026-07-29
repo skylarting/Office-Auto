@@ -29,6 +29,15 @@ class ExportSummaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             export_summary.parse_cell_addresses("I0, BAD")
 
+    def test_cell_grid_address_helpers(self) -> None:
+        self.assertEqual(export_summary.column_letters_to_number("A"), 1)
+        self.assertEqual(export_summary.column_letters_to_number("AZ"), 52)
+        self.assertEqual(export_summary.column_number_to_letters(52), "AZ")
+        self.assertEqual(
+            sorted(["L8", "I17", "J8", "I8"], key=export_summary.cell_sort_key),
+            ["I8", "J8", "L8", "I17"],
+        )
+
     def test_create_combined_summary(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)
