@@ -16,6 +16,7 @@ from tkinter import (
     X,
     Canvas,
     IntVar,
+    Menu,
     StringVar,
     Text,
     Tk,
@@ -227,47 +228,97 @@ def create_new_summary_workbook(
         progress(total, total, f"已生成：{output_path.name}")
 
 
-def insert_summary_into_workbook(
+def unique_sheet_name(workbook, preferred_name: str) -> str:
+    if preferred_name not in workbook.sheetnames:
+        return preferred_name
+
+    index = 2
+    while True:
+        suffix = f" ({index})"
+        candidate = f"{preferred_name[:31 - len(suffix)]}{suffix}"
+        if candidate not in workbook.sheetnames:
+            return candidate
+        index += 1
+
+
+def unique_output_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+
+    index = 2
+    while True:
+        candidate = path.with_name(f"{path.stem}_{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def create_summary_copy(
     source_path: Path,
     addresses: list[str],
     summary_name: str,
-) -> None:
+    output_path: Path,
+) -> Path:
     records = read_records(source_path, addresses, summary_name)
     keep_vba = source_path.suffix.lower() == ".xlsm"
     workbook = load_workbook(source_path, keep_vba=keep_vba)
 
-    if summary_name in workbook.sheetnames:
-        workbook.remove(workbook[summary_name])
-    summary_sheet = workbook.create_sheet(summary_name, 0)
+    actual_name = unique_sheet_name(workbook, summary_name)
+    summary_sheet = workbook.create_sheet(actual_name, 0)
     format_summary_sheet(
         summary_sheet,
         addresses,
         records,
         include_file_name=False,
     )
-    workbook.save(source_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
     workbook.close()
+    return output_path
 
 
-def insert_summaries(
+def create_summary_copies(
     source_files: list[Path],
     addresses: list[str],
     summary_name: str,
+    output_target: Path,
     progress: Callable[[int, int, str], None] | None = None,
-) -> None:
+) -> list[Path]:
     total = len(source_files)
+    output_paths: list[Path] = []
     for index, source_path in enumerate(source_files, start=1):
         if progress:
             progress(index - 1, total, f"正在处理：{source_path.name}")
-        insert_summary_into_workbook(source_path, addresses, summary_name)
+        proposed = (
+            output_target / source_path.name
+            if len(source_files) > 1
+            else output_target
+        )
+        output_path = unique_output_path(proposed)
+        create_summary_copy(
+            source_path,
+            addresses,
+            summary_name,
+            output_path,
+        )
+        output_paths.append(output_path)
         if progress:
             progress(index, total, f"已完成：{source_path.name}")
+    return output_paths
 
 
 def default_output_path(source_path: Path, source_mode: str) -> Path:
     if source_mode == "file":
         return source_path.with_name(f"{source_path.stem}_汇总表.xlsx")
     return source_path / "批量汇总表.xlsx"
+
+
+def default_copy_target(source_path: Path, source_mode: str) -> Path:
+    if source_mode == "file":
+        return source_path.with_name(
+            f"{source_path.stem}_已汇总{source_path.suffix}"
+        )
+    return source_path / "汇总结果"
 
 
 def column_letters_to_number(letters: str) -> int:
@@ -500,13 +551,13 @@ class SummaryApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
         self.root.title("Excel 单元格汇总工具")
-        self.root.geometry("820x720")
-        self.root.minsize(760, 650)
+        self.root.geometry("920x660")
+        self.root.minsize(820, 560)
 
         self.source_mode = ""
         self.source_path = StringVar()
         self.source_summary = StringVar(value="尚未选择数据来源")
-        self.output_choice = StringVar(value="新建表格文件")
+        self.output_choice = StringVar(value="新建汇总文件")
         self.output_path = StringVar()
         self.summary_name = StringVar(value="汇总")
         self.selection_summary = StringVar()
@@ -526,33 +577,99 @@ class SummaryApp:
         container = ttk.Frame(self.root, padding=18)
         container.pack(fill=BOTH, expand=True)
 
-        source_frame = ttk.LabelFrame(container, text="1. 选择数据来源", padding=12)
-        source_frame.pack(fill=X, pady=(0, 12))
-
-        source_buttons = ttk.Frame(source_frame)
-        source_buttons.pack(fill=X)
+        action_row = ttk.Frame(container)
+        action_row.pack(side="bottom", fill=X)
+        self.start_button = ttk.Button(
+            action_row,
+            text="开始提取",
+            command=self._run,
+            state="disabled",
+        )
+        self.start_button.pack(side=LEFT)
         ttk.Button(
-            source_buttons,
-            text="选择表格文件",
-            command=self._choose_file,
-        ).pack(side=LEFT)
-        ttk.Button(
-            source_buttons,
-            text="选择文件夹",
-            command=self._choose_folder,
+            action_row,
+            text="退出",
+            command=self.root.destroy,
         ).pack(side=LEFT, padx=(8, 0))
+
+        progress_frame = ttk.LabelFrame(
+            container,
+            text="3. 处理进度",
+            padding=10,
+        )
+        progress_frame.pack(side="bottom", fill=X, pady=(10, 10))
+        progress_title = ttk.Frame(progress_frame)
+        progress_title.pack(fill=X, pady=(0, 5))
+        ttk.Label(progress_title, text="处理进度").pack(side=LEFT)
+        ttk.Label(
+            progress_title,
+            textvariable=self.progress_percent,
+        ).pack(side=RIGHT)
+        self.progress = ttk.Progressbar(progress_frame, mode="determinate")
+        self.progress.pack(fill=X)
+        ttk.Label(
+            progress_frame,
+            textvariable=self.status_text,
+        ).pack(anchor=W, pady=(5, 0))
+
+        top_row = ttk.Frame(container)
+        top_row.pack(fill=X, pady=(0, 10))
+        top_row.columnconfigure(0, weight=1, uniform="top")
+        top_row.columnconfigure(1, weight=1, uniform="top")
+
+        source_frame = ttk.LabelFrame(
+            top_row,
+            text="1. 选择数据来源",
+            padding=10,
+        )
+        source_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+
+        browse_button = ttk.Menubutton(source_frame, text="浏览...")
+        source_menu = Menu(browse_button, tearoff=False)
+        source_menu.add_command(
+            label="选择一个表格文件",
+            command=self._choose_file,
+        )
+        source_menu.add_command(
+            label="选择包含表格的文件夹",
+            command=self._choose_folder,
+        )
+        browse_button.configure(menu=source_menu)
+        browse_button.pack(anchor=W)
         ttk.Label(
             source_frame,
             textvariable=self.source_summary,
             foreground="#3A3A3A",
-        ).pack(anchor=W, pady=(10, 0))
+            wraplength=390,
+        ).pack(anchor=W, pady=(8, 0))
+
+        output_frame = ttk.LabelFrame(
+            top_row,
+            text="选择输出方式",
+            padding=10,
+        )
+        output_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        output_selector = ttk.Frame(output_frame)
+        output_selector.pack(fill=X)
+        ttk.Label(output_selector, text="输出方式：").pack(side=LEFT)
+        output_combo = ttk.Combobox(
+            output_selector,
+            textvariable=self.output_choice,
+            values=("新建汇总文件", "生成含汇总表的副本"),
+            state="readonly",
+            width=21,
+        )
+        output_combo.pack(side=LEFT, fill=X, expand=True)
+        output_combo.bind("<<ComboboxSelected>>", self._output_changed)
+        self.output_fields = ttk.Frame(output_frame)
+        self.output_fields.pack(fill=X, pady=(8, 0))
 
         cell_frame = ttk.LabelFrame(
             container,
             text="2. 选择需要提取的单元格",
-            padding=12,
+            padding=10,
         )
-        cell_frame.pack(fill=BOTH, expand=True, pady=(0, 12))
+        cell_frame.pack(fill=BOTH, expand=True)
         self.cell_notebook = ttk.Notebook(cell_frame)
         self.cell_notebook.pack(fill=BOTH, expand=True)
 
@@ -608,57 +725,6 @@ class SummaryApp:
             textvariable=self.selection_summary,
         ).pack(side=LEFT, padx=(16, 0))
 
-        output_frame = ttk.LabelFrame(container, text="3. 选择输出方式", padding=12)
-        output_frame.pack(fill=X, pady=(0, 12))
-        output_selector = ttk.Frame(output_frame)
-        output_selector.pack(fill=X)
-        ttk.Label(output_selector, text="输出方式：").pack(side=LEFT)
-        output_combo = ttk.Combobox(
-            output_selector,
-            textvariable=self.output_choice,
-            values=("新建表格文件", "插入表单"),
-            state="readonly",
-            width=20,
-        )
-        output_combo.pack(side=LEFT)
-        output_combo.bind("<<ComboboxSelected>>", self._output_changed)
-        self.output_fields = ttk.Frame(output_frame)
-        self.output_fields.pack(fill=X, pady=(10, 0))
-
-        progress_frame = ttk.LabelFrame(
-            container,
-            text="4. 处理进度",
-            padding=12,
-        )
-        progress_frame.pack(fill=X, pady=(0, 12))
-        progress_title = ttk.Frame(progress_frame)
-        progress_title.pack(fill=X, pady=(0, 6))
-        ttk.Label(progress_title, text="处理进度").pack(side=LEFT)
-        ttk.Label(
-            progress_title,
-            textvariable=self.progress_percent,
-        ).pack(side=RIGHT)
-        self.progress = ttk.Progressbar(progress_frame, mode="determinate")
-        self.progress.pack(fill=X)
-        ttk.Label(
-            progress_frame,
-            textvariable=self.status_text,
-        ).pack(anchor=W, pady=(6, 0))
-
-        action_row = ttk.Frame(container)
-        action_row.pack(fill=X)
-        self.start_button = ttk.Button(
-            action_row,
-            text="开始提取",
-            command=self._run,
-            state="disabled",
-        )
-        self.start_button.pack(side=LEFT)
-        ttk.Button(
-            action_row,
-            text="退出",
-            command=self.root.destroy,
-        ).pack(side=LEFT, padx=(8, 0))
 
     def _choose_file(self) -> None:
         selected = filedialog.askopenfilename(
@@ -707,37 +773,52 @@ class SummaryApp:
 
     def _source_changed(self) -> None:
         source_path = Path(self.source_path.get())
-        if self.output_choice.get() == "新建表格文件":
-            self.output_path.set(
-                str(default_output_path(source_path, self.source_mode))
-            )
-            self._show_output_fields()
+        default_path = (
+            default_output_path(source_path, self.source_mode)
+            if self.output_choice.get() == "新建汇总文件"
+            else default_copy_target(source_path, self.source_mode)
+        )
+        self.output_path.set(str(default_path))
+        self._show_output_fields()
         self._configuration_changed()
 
     def _browse_output(self) -> None:
-        selected = filedialog.asksaveasfilename(
-            title="选择汇总文件保存位置",
-            defaultextension=".xlsx",
-            filetypes=[("Excel 工作簿", "*.xlsx")],
-            initialfile=Path(self.output_path.get() or "汇总表.xlsx").name,
-        )
+        if (
+            self.output_choice.get() == "生成含汇总表的副本"
+            and self.source_mode == "folder"
+        ):
+            selected = filedialog.askdirectory(
+                title="选择副本输出文件夹"
+            )
+        else:
+            current = Path(self.output_path.get() or "汇总表.xlsx")
+            suffix = (
+                Path(self.source_path.get()).suffix
+                if self.output_choice.get() == "生成含汇总表的副本"
+                else ".xlsx"
+            )
+            selected = filedialog.asksaveasfilename(
+                title="选择输出文件位置",
+                defaultextension=suffix,
+                filetypes=[
+                    ("Excel 工作簿", f"*{suffix}"),
+                    ("所有文件", "*.*"),
+                ],
+                initialfile=current.name,
+            )
         if selected:
             self.output_path.set(selected)
             self._configuration_changed()
 
     def _output_changed(self, _event=None) -> None:
-        if (
-            self.output_choice.get() == "新建表格文件"
-            and self.source_path.get()
-        ):
-            self.output_path.set(
-                str(
-                    default_output_path(
-                        Path(self.source_path.get()),
-                        self.source_mode,
-                    )
-                )
+        if self.source_path.get():
+            source_path = Path(self.source_path.get())
+            default_path = (
+                default_output_path(source_path, self.source_mode)
+                if self.output_choice.get() == "新建汇总文件"
+                else default_copy_target(source_path, self.source_mode)
             )
+            self.output_path.set(str(default_path))
         self._show_output_fields()
         self._configuration_changed()
 
@@ -745,33 +826,45 @@ class SummaryApp:
         for child in self.output_fields.winfo_children():
             child.destroy()
 
-        if self.output_choice.get() == "新建表格文件":
-            ttk.Label(self.output_fields, text="输出文件：").pack(side=LEFT)
-            output_entry = ttk.Entry(
-                self.output_fields,
-                textvariable=self.output_path,
+        location_row = ttk.Frame(self.output_fields)
+        location_row.pack(fill=X)
+        location_label = (
+            "输出文件夹："
+            if (
+                self.output_choice.get() == "生成含汇总表的副本"
+                and self.source_mode == "folder"
             )
-            output_entry.pack(side=LEFT, fill=X, expand=True)
-            output_entry.bind("<KeyRelease>", self._configuration_changed)
-            ttk.Button(
-                self.output_fields,
-                text="浏览...",
-                command=self._browse_output,
-            ).pack(side=LEFT, padx=(8, 0))
-        else:
-            ttk.Label(self.output_fields, text="表单名称：").pack(side=LEFT)
+            else "输出文件："
+        )
+        ttk.Label(location_row, text=location_label).pack(side=LEFT)
+        output_entry = ttk.Entry(
+            location_row,
+            textvariable=self.output_path,
+        )
+        output_entry.pack(side=LEFT, fill=X, expand=True)
+        output_entry.bind("<KeyRelease>", self._configuration_changed)
+        ttk.Button(
+            location_row,
+            text="浏览...",
+            command=self._browse_output,
+        ).pack(side=LEFT, padx=(6, 0))
+
+        if self.output_choice.get() == "生成含汇总表的副本":
+            name_row = ttk.Frame(self.output_fields)
+            name_row.pack(fill=X, pady=(6, 0))
+            ttk.Label(name_row, text="表单名称：").pack(side=LEFT)
             name_entry = ttk.Entry(
-                self.output_fields,
+                name_row,
                 textvariable=self.summary_name,
-                width=20,
+                width=14,
             )
             name_entry.pack(side=LEFT)
             name_entry.bind("<KeyRelease>", self._configuration_changed)
             ttk.Label(
-                self.output_fields,
-                text="将在每个源工作簿最前面插入或替换该表单",
+                name_row,
+                text="只写入新副本；原文件不会修改",
                 foreground="#666666",
-            ).pack(side=LEFT, padx=(12, 0))
+            ).pack(side=LEFT, padx=(8, 0))
 
     def _manual_cells_changed(self, _event=None) -> None:
         if self._syncing_cells:
@@ -831,9 +924,8 @@ class SummaryApp:
             and self.selected_addresses
             and self.cells_valid
         )
-        if self.output_choice.get() == "新建表格文件":
-            valid = valid and bool(self.output_path.get().strip())
-        else:
+        valid = valid and bool(self.output_path.get().strip())
+        if self.output_choice.get() == "生成含汇总表的副本":
             valid = valid and bool(self.summary_name.get().strip())
         self.start_button.configure(state="normal" if valid else "disabled")
 
@@ -855,7 +947,7 @@ class SummaryApp:
             self._reset_progress()
             summary_name = (
                 "汇总"
-                if self.output_choice.get() == "新建表格文件"
+                if self.output_choice.get() == "新建汇总文件"
                 else self.summary_name.get().strip()
             )
             if not summary_name:
@@ -873,13 +965,13 @@ class SummaryApp:
                 summary_name,
             )
 
-            if self.output_choice.get() == "新建表格文件":
-                output_text = self.output_path.get().strip()
-                output_path = (
-                    Path(output_text)
-                    if output_text
-                    else default_output_path(source_path, self.source_mode)
-                )
+            output_text = self.output_path.get().strip()
+            if not output_text:
+                raise ValueError("请选择输出位置。")
+            output_target = Path(output_text)
+
+            if self.output_choice.get() == "新建汇总文件":
+                output_path = output_target
                 if output_path.resolve() in {
                     path.resolve() for path in source_files
                 }:
@@ -893,21 +985,22 @@ class SummaryApp:
                 )
                 result_message = f"汇总文件已生成：\n{output_path}"
             else:
-                confirmed = messagebox.askyesno(
-                    "确认写入源文件",
-                    "此操作会修改所选源工作簿，并在最前面插入或替换"
-                    f"“{summary_name}”工作表。\n\n建议提前备份源文件。是否继续？",
-                    parent=self.root,
-                )
-                if not confirmed:
-                    return
-                insert_summaries(
+                if (
+                    len(source_files) == 1
+                    and output_target.resolve() == source_files[0].resolve()
+                ):
+                    raise ValueError("副本输出文件不能与源文件相同。")
+                output_paths = create_summary_copies(
                     source_files,
                     addresses,
                     summary_name,
+                    output_target,
                     self._progress,
                 )
-                result_message = f"已更新 {len(source_files)} 个工作簿。"
+                result_message = (
+                    f"已生成 {len(output_paths)} 个新副本；原文件未修改。\n\n"
+                    f"输出位置：{output_target}"
+                )
 
             self.progress.configure(value=self.progress.cget("maximum"))
             self.progress_percent.set("100%")
