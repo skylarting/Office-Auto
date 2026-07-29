@@ -16,10 +16,10 @@ from tkinter import (
     X,
     Canvas,
     IntVar,
-    Menu,
     StringVar,
     Text,
     Tk,
+    Toplevel,
     filedialog,
     messagebox,
     ttk,
@@ -27,15 +27,11 @@ from tkinter import (
 from typing import Callable, Iterable
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 
 DEFAULT_CELL_ADDRESSES = [
-    "I8", "J8", "L8",
-    "I17", "J17", "L17",
-    "I24", "J24", "L24",
-    "I25", "J25", "L25",
-    "I26", "J26", "L26",
+    "A2", "C2", "A3", "C3",
 ]
 VALID_CELL_RE = re.compile(r"^[A-Z]{1,3}[1-9][0-9]*$")
 WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
@@ -194,6 +190,22 @@ def format_summary_sheet(
         sheet.column_dimensions[
             sheet.cell(row=1, column=column).column_letter
         ].width = 14
+
+    thin_side = Side(style="thin", color="808080")
+    all_borders = Border(
+        left=thin_side,
+        right=thin_side,
+        top=thin_side,
+        bottom=thin_side,
+    )
+    for row in sheet.iter_rows(
+        min_row=1,
+        max_row=sheet.max_row,
+        min_col=1,
+        max_col=sheet.max_column,
+    ):
+        for cell in row:
+            cell.border = all_borders
 
 
 def create_new_summary_workbook(
@@ -547,6 +559,173 @@ class CellGridPicker(ttk.Frame):
                     )
 
 
+class SourceSelectionDialog:
+    """One browser that can return either a workbook or a directory."""
+
+    def __init__(self, parent: Tk, initial_path: Path | None = None) -> None:
+        self.result: Path | None = None
+        self.current_dir = self._initial_directory(initial_path)
+        self.items: dict[str, Path] = {}
+
+        self.window = Toplevel(parent)
+        self.window.title("选择表格文件或文件夹")
+        self.window.geometry("720x480")
+        self.window.minsize(600, 400)
+        self.window.transient(parent)
+        self.window.grab_set()
+
+        container = ttk.Frame(self.window, padding=14)
+        container.pack(fill=BOTH, expand=True)
+
+        navigation = ttk.Frame(container)
+        navigation.pack(fill=X, pady=(0, 8))
+        ttk.Button(
+            navigation,
+            text="上一级",
+            command=self._go_up,
+        ).pack(side=LEFT)
+        self.path_var = StringVar(value=str(self.current_dir))
+        path_entry = ttk.Entry(navigation, textvariable=self.path_var)
+        path_entry.pack(side=LEFT, fill=X, expand=True, padx=(8, 0))
+        path_entry.bind("<Return>", self._go_to_entered_path)
+
+        ttk.Label(
+            container,
+            text="选择一个 Excel 文件，或选择文件夹以处理其中的全部 Excel 文件。",
+        ).pack(anchor=W, pady=(0, 8))
+
+        tree_frame = ttk.Frame(container)
+        tree_frame.pack(fill=BOTH, expand=True)
+        self.tree = ttk.Treeview(
+            tree_frame,
+            columns=("type",),
+            show="tree headings",
+            selectmode="browse",
+        )
+        self.tree.heading("#0", text="名称")
+        self.tree.heading("type", text="类型")
+        self.tree.column("#0", width=480, anchor=W)
+        self.tree.column("type", width=120, anchor=W)
+        scroll = ttk.Scrollbar(
+            tree_frame,
+            orient="vertical",
+            command=self.tree.yview,
+        )
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side=LEFT, fill=BOTH, expand=True)
+        scroll.pack(side=RIGHT, fill="y")
+        self.tree.bind("<Double-1>", self._double_click)
+
+        actions = ttk.Frame(container)
+        actions.pack(fill=X, pady=(10, 0))
+        ttk.Button(
+            actions,
+            text="确定",
+            command=self._confirm,
+        ).pack(side=LEFT)
+        ttk.Button(
+            actions,
+            text="取消",
+            command=self.window.destroy,
+        ).pack(side=LEFT, padx=(8, 0))
+
+        self._refresh()
+        self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
+        parent.wait_window(self.window)
+
+    @staticmethod
+    def _initial_directory(initial_path: Path | None) -> Path:
+        if initial_path:
+            candidate = initial_path if initial_path.is_dir() else initial_path.parent
+            if candidate.is_dir():
+                return candidate
+        return Path.home()
+
+    def _refresh(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        self.items.clear()
+        self.path_var.set(str(self.current_dir))
+
+        current_id = self.tree.insert(
+            "",
+            END,
+            text="[选择当前文件夹]",
+            values=("文件夹",),
+        )
+        self.items[current_id] = self.current_dir
+
+        try:
+            entries = sorted(
+                self.current_dir.iterdir(),
+                key=lambda path: (not path.is_dir(), path.name.lower()),
+            )
+        except OSError as exc:
+            messagebox.showerror(
+                "无法打开文件夹",
+                str(exc),
+                parent=self.window,
+            )
+            return
+
+        for path in entries:
+            if path.name.startswith("."):
+                continue
+            if not path.is_dir() and path.suffix.lower() not in WORKBOOK_SUFFIXES:
+                continue
+            item_id = self.tree.insert(
+                "",
+                END,
+                text=path.name,
+                values=("文件夹" if path.is_dir() else "Excel 文件",),
+            )
+            self.items[item_id] = path
+
+    def _go_up(self) -> None:
+        parent = self.current_dir.parent
+        if parent != self.current_dir:
+            self.current_dir = parent
+            self._refresh()
+
+    def _go_to_entered_path(self, _event=None) -> None:
+        path = Path(self.path_var.get().strip())
+        if path.is_file():
+            self.result = path
+            self.window.destroy()
+        elif path.is_dir():
+            self.current_dir = path
+            self._refresh()
+        else:
+            messagebox.showerror(
+                "路径无效",
+                "请输入有效的文件夹或 Excel 文件路径。",
+                parent=self.window,
+            )
+
+    def _double_click(self, _event=None) -> None:
+        selection = self.tree.selection()
+        if not selection:
+            return
+        path = self.items[selection[0]]
+        if path.is_dir() and self.tree.item(selection[0], "text") != "[选择当前文件夹]":
+            self.current_dir = path
+            self._refresh()
+        elif path.is_file():
+            self.result = path
+            self.window.destroy()
+
+    def _confirm(self) -> None:
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "请选择数据来源",
+                "请先选中一个 Excel 文件或文件夹。",
+                parent=self.window,
+            )
+            return
+        self.result = self.items[selection[0]]
+        self.window.destroy()
+
+
 class SummaryApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
@@ -557,10 +736,11 @@ class SummaryApp:
         self.source_mode = ""
         self.source_path = StringVar()
         self.source_summary = StringVar(value="尚未选择数据来源")
-        self.output_choice = StringVar(value="新建汇总文件")
+        self.output_choice = StringVar(value="把所有结果合并到一个新文件")
         self.output_path = StringVar()
         self.summary_name = StringVar(value="汇总")
         self.selection_summary = StringVar()
+        self.selection_details = StringVar()
         self.validation_text = StringVar()
         self.status_text = StringVar(value="等待开始")
         self.progress_percent = StringVar(value="0%")
@@ -624,18 +804,11 @@ class SummaryApp:
         )
         source_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
-        browse_button = ttk.Menubutton(source_frame, text="浏览...")
-        source_menu = Menu(browse_button, tearoff=False)
-        source_menu.add_command(
-            label="选择一个表格文件",
-            command=self._choose_file,
-        )
-        source_menu.add_command(
-            label="选择包含表格的文件夹",
-            command=self._choose_folder,
-        )
-        browse_button.configure(menu=source_menu)
-        browse_button.pack(anchor=W)
+        ttk.Button(
+            source_frame,
+            text="浏览...",
+            command=self._browse_source,
+        ).pack(anchor=W)
         ttk.Label(
             source_frame,
             textvariable=self.source_summary,
@@ -655,20 +828,38 @@ class SummaryApp:
         output_combo = ttk.Combobox(
             output_selector,
             textvariable=self.output_choice,
-            values=("新建汇总文件", "生成含汇总表的副本"),
+            values=(
+                "把所有结果合并到一个新文件",
+                "为每个源文件生成带汇总页的副本",
+            ),
             state="readonly",
-            width=21,
+            width=30,
         )
         output_combo.pack(side=LEFT, fill=X, expand=True)
         output_combo.bind("<<ComboboxSelected>>", self._output_changed)
         self.output_fields = ttk.Frame(output_frame)
         self.output_fields.pack(fill=X, pady=(8, 0))
 
-        cell_frame = ttk.LabelFrame(
-            container,
+        cell_section = ttk.Frame(container)
+        cell_section.pack(fill=BOTH, expand=True)
+        cell_header = ttk.Frame(cell_section)
+        cell_header.pack(fill=X, pady=(0, 5))
+        ttk.Label(
+            cell_header,
             text="2. 选择需要提取的单元格",
-            padding=10,
-        )
+        ).pack(side=LEFT)
+        ttk.Button(
+            cell_header,
+            text="恢复默认",
+            command=self._restore_default_cells,
+        ).pack(side=RIGHT)
+        ttk.Button(
+            cell_header,
+            text="清空",
+            command=self._clear_cells,
+        ).pack(side=RIGHT, padx=(0, 6))
+
+        cell_frame = ttk.LabelFrame(cell_section, padding=10)
         cell_frame.pack(fill=BOTH, expand=True)
         self.cell_notebook = ttk.Notebook(cell_frame)
         self.cell_notebook.pack(fill=BOTH, expand=True)
@@ -690,41 +881,70 @@ class SummaryApp:
             textvariable=self.validation_text,
             foreground="#C62828",
         ).pack(anchor=W)
-        manual_actions = ttk.Frame(manual_tab)
-        manual_actions.pack(fill=X, pady=(8, 0))
-        ttk.Button(
-            manual_actions,
-            text="恢复默认",
-            command=self._restore_default_cells,
-        ).pack(side=LEFT)
-        ttk.Button(
-            manual_actions,
-            text="清空",
-            command=self._clear_cells,
-        ).pack(side=LEFT, padx=(8, 0))
+        ttk.Label(
+            manual_tab,
+            textvariable=self.selection_summary,
+        ).pack(anchor=W, pady=(8, 0))
 
+        ttk.Label(
+            visual_tab,
+            textvariable=self.selection_details,
+            wraplength=790,
+            justify=LEFT,
+        ).pack(fill=X, anchor=W, pady=(0, 8))
         self.cell_grid = CellGridPicker(
             visual_tab,
             self._grid_cells_changed,
         )
         self.cell_grid.pack(fill=BOTH, expand=True)
-        visual_actions = ttk.Frame(visual_tab)
-        visual_actions.pack(fill=X, pady=(8, 0))
-        ttk.Button(
-            visual_actions,
-            text="恢复默认",
-            command=self._restore_default_cells,
-        ).pack(side=LEFT)
-        ttk.Button(
-            visual_actions,
-            text="清空选择",
-            command=self._clear_cells,
-        ).pack(side=LEFT, padx=(8, 0))
-        ttk.Label(
-            visual_actions,
-            textvariable=self.selection_summary,
-        ).pack(side=LEFT, padx=(16, 0))
 
+
+    def _browse_source(self) -> None:
+        initial = Path(self.source_path.get()) if self.source_path.get() else None
+        dialog = SourceSelectionDialog(self.root, initial)
+        selected = dialog.result
+        if not selected:
+            return
+
+        if selected.is_file():
+            if not is_source_workbook(selected, self.summary_name.get()):
+                messagebox.showerror(
+                    "文件无效",
+                    "请选择有效的 .xlsx 或 .xlsm 文件。",
+                    parent=self.root,
+                )
+                return
+            self.source_mode = "file"
+            self.source_path.set(str(selected))
+            self.source_summary.set(f"已选择文件：{selected}")
+            self._source_changed()
+            return
+
+        try:
+            files = find_workbooks(
+                selected,
+                "folder",
+                self.summary_name.get(),
+            )
+        except ValueError as exc:
+            messagebox.showerror("无法选择文件夹", str(exc), parent=self.root)
+            return
+
+        confirmed = messagebox.askyesno(
+            "确认批量提取",
+            f"该文件夹中发现 {len(files)} 个可处理的 Excel 文件。\n\n"
+            "是否提取该文件夹下的所有表格文件？",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        self.source_mode = "folder"
+        self.source_path.set(str(selected))
+        self.source_summary.set(
+            f"已选择文件夹：{selected}（共 {len(files)} 个 Excel 文件）"
+        )
+        self._source_changed()
 
     def _choose_file(self) -> None:
         selected = filedialog.askopenfilename(
@@ -775,7 +995,7 @@ class SummaryApp:
         source_path = Path(self.source_path.get())
         default_path = (
             default_output_path(source_path, self.source_mode)
-            if self.output_choice.get() == "新建汇总文件"
+            if self.output_choice.get() == "把所有结果合并到一个新文件"
             else default_copy_target(source_path, self.source_mode)
         )
         self.output_path.set(str(default_path))
@@ -784,7 +1004,7 @@ class SummaryApp:
 
     def _browse_output(self) -> None:
         if (
-            self.output_choice.get() == "生成含汇总表的副本"
+            self.output_choice.get() == "为每个源文件生成带汇总页的副本"
             and self.source_mode == "folder"
         ):
             selected = filedialog.askdirectory(
@@ -794,7 +1014,7 @@ class SummaryApp:
             current = Path(self.output_path.get() or "汇总表.xlsx")
             suffix = (
                 Path(self.source_path.get()).suffix
-                if self.output_choice.get() == "生成含汇总表的副本"
+                if self.output_choice.get() == "为每个源文件生成带汇总页的副本"
                 else ".xlsx"
             )
             selected = filedialog.asksaveasfilename(
@@ -815,7 +1035,7 @@ class SummaryApp:
             source_path = Path(self.source_path.get())
             default_path = (
                 default_output_path(source_path, self.source_mode)
-                if self.output_choice.get() == "新建汇总文件"
+                if self.output_choice.get() == "把所有结果合并到一个新文件"
                 else default_copy_target(source_path, self.source_mode)
             )
             self.output_path.set(str(default_path))
@@ -831,7 +1051,7 @@ class SummaryApp:
         location_label = (
             "输出文件夹："
             if (
-                self.output_choice.get() == "生成含汇总表的副本"
+                self.output_choice.get() == "为每个源文件生成带汇总页的副本"
                 and self.source_mode == "folder"
             )
             else "输出文件："
@@ -849,7 +1069,7 @@ class SummaryApp:
             command=self._browse_output,
         ).pack(side=LEFT, padx=(6, 0))
 
-        if self.output_choice.get() == "生成含汇总表的副本":
+        if self.output_choice.get() == "为每个源文件生成带汇总页的副本":
             name_row = ttk.Frame(self.output_fields)
             name_row.pack(fill=X, pady=(6, 0))
             ttk.Label(name_row, text="表单名称：").pack(side=LEFT)
@@ -906,6 +1126,10 @@ class SummaryApp:
             f"已选择 {len(ordered)} 个单元格"
             + (f"：{preview}" if preview else "")
         )
+        self.selection_details.set(
+            f"已选择 {len(ordered)} 个单元格："
+            + (", ".join(ordered) if ordered else "无")
+        )
         self.validation_text.set(
             "" if ordered else "请至少选择一个需要提取的单元格。"
         )
@@ -925,7 +1149,7 @@ class SummaryApp:
             and self.cells_valid
         )
         valid = valid and bool(self.output_path.get().strip())
-        if self.output_choice.get() == "生成含汇总表的副本":
+        if self.output_choice.get() == "为每个源文件生成带汇总页的副本":
             valid = valid and bool(self.summary_name.get().strip())
         self.start_button.configure(state="normal" if valid else "disabled")
 
@@ -947,7 +1171,7 @@ class SummaryApp:
             self._reset_progress()
             summary_name = (
                 "汇总"
-                if self.output_choice.get() == "新建汇总文件"
+                if self.output_choice.get() == "把所有结果合并到一个新文件"
                 else self.summary_name.get().strip()
             )
             if not summary_name:
@@ -970,7 +1194,7 @@ class SummaryApp:
                 raise ValueError("请选择输出位置。")
             output_target = Path(output_text)
 
-            if self.output_choice.get() == "新建汇总文件":
+            if self.output_choice.get() == "把所有结果合并到一个新文件":
                 output_path = output_target
                 if output_path.resolve() in {
                     path.resolve() for path in source_files
