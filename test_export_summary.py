@@ -63,22 +63,28 @@ class ExportSummaryTests(unittest.TestCase):
             self.assertEqual(sheet["C2"].number_format, "0")
             workbook.close()
 
-    def test_insert_summary_as_first_sheet(self) -> None:
+    def test_create_copy_with_summary_as_first_sheet(self) -> None:
         with TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "源.xlsx"
+            output = Path(temp_dir) / "源_已汇总.xlsx"
             make_source(source, 300)
 
-            export_summary.insert_summary_into_workbook(
+            export_summary.create_summary_copy(
                 source,
                 ["I8", "J8"],
                 "汇总",
+                output,
             )
 
-            workbook = load_workbook(source, data_only=False)
-            self.assertEqual(workbook.sheetnames[0], "汇总")
-            self.assertEqual(workbook["汇总"]["B2"].value, 301.25)
-            self.assertEqual(workbook["汇总"]["B2"].number_format, "0")
-            workbook.close()
+            original = load_workbook(source, data_only=False)
+            self.assertNotIn("汇总", original.sheetnames)
+            original.close()
+
+            copied = load_workbook(output, data_only=False)
+            self.assertEqual(copied.sheetnames[0], "汇总")
+            self.assertEqual(copied["汇总"]["B2"].value, 301.25)
+            self.assertEqual(copied["汇总"]["B2"].number_format, "0")
+            copied.close()
 
 
 if __name__ == "__main__":
