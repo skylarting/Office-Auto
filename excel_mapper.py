@@ -1668,6 +1668,8 @@ class MapperApp:
         self.scheme_status = StringVar(value="尚未导入或生成 Excel 方案。")
         self._scheme_editor = None
         self._scheme_editor_context = None
+        self._scheme_single_click_after = None
+        self._scheme_ignore_next_release = False
         self._active_workflow_tab = 0
         self._configure_styles()
         self._build_ui()
@@ -1960,6 +1962,10 @@ class MapperApp:
             self._begin_scheme_cell_edit,
         )
         self.scheme_tree.bind(
+            "<ButtonRelease-1>",
+            self._schedule_scheme_single_click,
+        )
+        self.scheme_tree.bind(
             "<Return>",
             self._begin_selected_scheme_cell_edit,
         )
@@ -1977,7 +1983,10 @@ class MapperApp:
             ).pack(side=LEFT, padx=(0, 6))
         ttk.Label(
             scheme_actions,
-            text="双击工作簿、工作表或单元格即可直接编辑",
+            text=(
+                "单击：下拉/表格选择　　"
+                "双击：手工输入"
+            ),
             style="Muted.TLabel",
         ).pack(side=RIGHT)
         ttk.Label(
@@ -2560,7 +2569,40 @@ class MapperApp:
         self._open_scheme_editor(iid, "#3")
         return "break"
 
+    def _cancel_scheme_single_click(self) -> None:
+        if self._scheme_single_click_after is not None:
+            try:
+                self.root.after_cancel(self._scheme_single_click_after)
+            except Exception:
+                pass
+            self._scheme_single_click_after = None
+
+    def _schedule_scheme_single_click(self, event) -> None:
+        if self._scheme_ignore_next_release:
+            self._scheme_ignore_next_release = False
+            return
+        self._cancel_scheme_single_click()
+        if self.scheme_tree.identify_region(event.x, event.y) != "cell":
+            return
+        iid = self.scheme_tree.identify_row(event.y)
+        column = self.scheme_tree.identify_column(event.x)
+        if not iid or column not in ("#3", "#4", "#5"):
+            return
+        self._scheme_single_click_after = self.root.after(
+            240,
+            lambda: self._handle_scheme_single_click(iid, column),
+        )
+
+    def _handle_scheme_single_click(self, iid: str, column: str) -> None:
+        self._scheme_single_click_after = None
+        if column == "#5":
+            self._pick_scheme_cells(iid)
+        else:
+            self._open_scheme_editor(iid, column, open_dropdown=True)
+
     def _begin_scheme_cell_edit(self, event) -> str:
+        self._cancel_scheme_single_click()
+        self._scheme_ignore_next_release = True
         region = self.scheme_tree.identify_region(event.x, event.y)
         if region != "cell":
             return "break"
@@ -2569,7 +2611,7 @@ class MapperApp:
         if iid and column in ("#3", "#4", "#5"):
             self.scheme_tree.selection_set(iid)
             self.scheme_tree.focus(iid)
-            self._open_scheme_editor(iid, column)
+            self._open_scheme_editor(iid, column, open_dropdown=False)
         return "break"
 
     def _scheme_editor_values(
@@ -2583,12 +2625,22 @@ class MapperApp:
             path = Path(
                 rule.source_file if is_source else rule.target_file
             )
+            base = self._default_scheme_base_folder()
+            candidates: list[str] = []
+            if base is not None and base.is_dir():
+                try:
+                    candidates = [
+                        format_project_path(candidate, base)
+                        for candidate in workbook_files_in_folder(base)
+                    ]
+                except OSError:
+                    candidates = []
             return (
                 format_project_path(
                     path,
-                    self._default_scheme_base_folder(),
+                    base,
                 ),
-                [],
+                candidates,
             )
         if column == "#4":
             path = Path(
@@ -2607,7 +2659,12 @@ class MapperApp:
             return "同位置", []
         return format_cell_addresses(cells), []
 
-    def _open_scheme_editor(self, iid: str, column: str) -> None:
+    def _open_scheme_editor(
+        self,
+        iid: str,
+        column: str,
+        open_dropdown: bool = False,
+    ) -> None:
         self._cancel_scheme_editor()
         try:
             _, index_text, kind = iid.split(":")
@@ -2620,7 +2677,7 @@ class MapperApp:
             return
         x, y, width, height = bbox
         current, values = self._scheme_editor_values(rule, kind, column)
-        if column == "#4":
+        if column in ("#3", "#4"):
             editor = ttk.Combobox(
                 self.scheme_tree,
                 values=values,
@@ -2655,6 +2712,71 @@ class MapperApp:
             "<FocusOut>",
             lambda _event: self._commit_scheme_editor(None),
         )
+        if open_dropdown:
+            self.root.after(
+                20,
+                lambda: self._post_scheme_combobox(editor),
+            )
+
+    @staticmethod
+    def _post_scheme_combobox(editor) -> None:
+        try:
+            editor.tk.call("ttk::combobox::Post", editor)
+        except Exception:
+            pass
+
+    def _pick_scheme_cells(self, iid: str) -> None:
+        try:
+            _, index_text, kind = iid.split(":")
+            index = int(index_text)
+            rule = self.scheme_rules[index]
+            is_source = kind == "source"
+            path = Path(rule.source_file if is_source else rule.target_file)
+            sheet = rule.source_sheet if is_source else rule.target_sheet
+            initial = (
+                list(rule.source_cells)
+                if is_source
+                else list(rule.target_cells)
+            )
+            if not path.exists():
+                raise ValueError(
+                    f"找不到工作簿：{path}\n"
+                    "请先在“工作簿”列选择正确文件。"
+                )
+            if not sheet:
+                raise ValueError("请先在“工作表”列选择工作表。")
+            dialog = CellPickerDialog(
+                self.root,
+                path,
+                sheet,
+                initial,
+            )
+            if dialog.result is None:
+                return
+            old_same_position = rule.target_cells == rule.source_cells
+            if is_source:
+                rule.source_cells = list(dialog.result)
+                if old_same_position:
+                    rule.target_cells = list(dialog.result)
+            else:
+                rule.target_cells = list(dialog.result)
+            rule.mode = infer_mapping_mode(
+                rule.source_cells,
+                rule.target_cells,
+            )
+            self._refresh_scheme_tree()
+            self.scheme_tree.selection_set(iid)
+            self.scheme_tree.focus(iid)
+            self.scheme_tree.see(iid)
+            self.scheme_status.set(
+                f"第 {index + 1} 组单元格已通过表格选择器更新。"
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "无法选择单元格",
+                str(exc),
+                parent=self.root,
+            )
 
     def _cancel_scheme_editor(self) -> str:
         editor = self._scheme_editor
@@ -2691,6 +2813,26 @@ class MapperApp:
                     rule.source_file = str(path)
                 else:
                     rule.target_file = str(path)
+                if path.exists():
+                    names = workbook_sheet_names(path)
+                    current_sheet = (
+                        rule.source_sheet
+                        if is_source
+                        else rule.target_sheet
+                    )
+                    if current_sheet not in names and names:
+                        counterpart = (
+                            rule.target_sheet
+                            if is_source
+                            else rule.source_sheet
+                        )
+                        selected_sheet = (
+                            best_name_match(counterpart, names) or names[0]
+                        )
+                        if is_source:
+                            rule.source_sheet = selected_sheet
+                        else:
+                            rule.target_sheet = selected_sheet
             elif column == "#4":
                 if not value:
                     raise ValueError("工作表不能为空。")
