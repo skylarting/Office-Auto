@@ -33,8 +33,8 @@ class ExcelMappingToolApp(MapperApp):
         )
         style.map(
             "Mapping.Treeview",
-            background=[("selected", "#E4DED3")],
-            foreground=[("selected", "#111111")],
+            background=[("selected", "#CFE8FA")],
+            foreground=[("selected", "#102A43")],
         )
         style.configure(
             "Title.TLabel",
