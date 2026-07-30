@@ -1370,14 +1370,22 @@ class MapperApp:
             ("复制选中", self._duplicate_rule),
             ("删除选中", self._delete_rule),
             ("清空映射", self._clear_rules),
-            ("展开预览", self._preview_expanded),
-            ("预检查", self._precheck),
         ):
             ttk.Button(
                 mapping_actions,
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(
+            mapping_actions,
+            text="预检查",
+            command=self._precheck,
+        ).pack(side=RIGHT)
+        ttk.Button(
+            mapping_actions,
+            text="展开预览",
+            command=self._preview_expanded,
+        ).pack(side=RIGHT, padx=(0, 6))
         plan_actions = ttk.Frame(txt_tab)
         plan_actions.pack(fill=X, pady=(0, 10))
         ttk.Label(
@@ -1388,7 +1396,6 @@ class MapperApp:
         for text, command in (
             ("导入 TXT 方案", self._load_project),
             ("保存 TXT 方案", self._save_project),
-            ("格式示例", self._show_txt_example),
         ):
             ttk.Button(
                 plan_actions,
@@ -1426,18 +1433,30 @@ class MapperApp:
             command=self._browse_txt_base,
         ).pack(side=LEFT, padx=(8, 0))
 
-        ttk.Label(
-            txt_tab,
+        content_panes = ttk.Panedwindow(txt_tab, orient="horizontal")
+        content_panes.pack(fill=BOTH, expand=True)
+
+        editor_group = ttk.LabelFrame(
+            content_panes,
             text="方案内容",
-            style="Section.TLabel",
-        ).pack(anchor=W)
-        txt_editor_frame = ttk.Frame(txt_tab)
+            padding=8,
+        )
+        example_group = ttk.LabelFrame(
+            content_panes,
+            text="格式示例与填写说明",
+            padding=8,
+        )
+        content_panes.add(editor_group, weight=3)
+        content_panes.add(example_group, weight=2)
+
+        txt_editor_frame = ttk.Frame(editor_group)
         txt_editor_frame.pack(fill=BOTH, expand=True, pady=(3, 0))
         self.txt_editor = Text(
             txt_editor_frame,
             wrap="none",
             font=("TkFixedFont", 10),
             undo=True,
+            width=72,
         )
         self.txt_editor.pack(side=LEFT, fill=BOTH, expand=True)
         txt_vertical = ttk.Scrollbar(
@@ -1447,7 +1466,7 @@ class MapperApp:
         )
         txt_vertical.pack(side=RIGHT, fill="y")
         txt_horizontal = ttk.Scrollbar(
-            txt_tab,
+            editor_group,
             orient="horizontal",
             command=self.txt_editor.xview,
         )
@@ -1457,6 +1476,41 @@ class MapperApp:
             xscrollcommand=txt_horizontal.set,
         )
         self.txt_editor.bind("<<Modified>>", self._txt_editor_modified)
+
+        example_header = ttk.Frame(example_group)
+        example_header.pack(fill=X, pady=(0, 5))
+        ttk.Label(
+            example_header,
+            text="可直接复制后修改：",
+            style="Muted.TLabel",
+        ).pack(side=LEFT)
+        ttk.Button(
+            example_header,
+            text="复制示例",
+            command=self._copy_txt_example,
+        ).pack(side=RIGHT)
+        self.txt_example_view = Text(
+            example_group,
+            wrap="char",
+            font=("TkFixedFont", 9),
+            height=8,
+            width=42,
+        )
+        self.txt_example_view.insert("1.0", TXT_EXAMPLE)
+        self.txt_example_view.configure(state="disabled")
+        self.txt_example_view.pack(fill=X)
+        ttk.Separator(example_group).pack(fill=X, pady=8)
+        instructions = Text(
+            example_group,
+            wrap="word",
+            font=("TkDefaultFont", 9),
+            height=8,
+            width=42,
+        )
+        instructions.insert("1.0", TXT_INSTRUCTIONS)
+        instructions.configure(state="disabled")
+        instructions.pack(fill=BOTH, expand=True)
+
         ttk.Label(
             txt_tab,
             textvariable=self.txt_status,
@@ -1822,6 +1876,11 @@ class MapperApp:
         if selected:
             self.output_folder.set(selected)
 
+    def _copy_txt_example(self) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(TXT_EXAMPLE)
+        self.status.set("TXT 格式示例已复制到剪贴板。")
+
     def _browse_txt_base(self) -> None:
         selected = filedialog.askdirectory(title="选择方案基准文件夹")
         if not selected:
@@ -1996,15 +2055,10 @@ class MapperApp:
         actions = ttk.Frame(container)
         actions.pack(fill=X, pady=(8, 0))
 
-        def copy_example() -> None:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(TXT_EXAMPLE)
-            self.status.set("TXT 格式示例已复制到剪贴板。")
-
         ttk.Button(
             actions,
             text="复制示例",
-            command=copy_example,
+            command=self._copy_txt_example,
         ).pack(side=LEFT)
         ttk.Button(
             actions,
