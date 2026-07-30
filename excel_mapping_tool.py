@@ -191,7 +191,7 @@ class ExcelMappingToolApp(MapperApp):
             container,
             text=(
                 "单击选择工作簿、工作表或单元格；双击工作簿可浏览其他文件，"
-                "双击工作表或单元格可手动输入；Delete 或右键管理整组。"
+                "双击工作表或单元格可手动输入；右键可插入/删除映射组。"
             ),
             style="Status.TLabel",
         ).pack(anchor=W, pady=(8, 4))
