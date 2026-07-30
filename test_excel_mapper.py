@@ -207,7 +207,7 @@ class ExcelMapperTests(unittest.TestCase):
             text = project.read_text(encoding="utf-8-sig")
             self.assertEqual(
                 text,
-                "【来源.xlsx｜数据｜A2 → 目标.xlsx｜模板｜B5】\n",
+                "【来源.xlsx；数据；A2 → 目标.xlsx；模板；B5】\n",
             )
 
     def test_txt_project_can_be_written_by_hand(self) -> None:
@@ -215,8 +215,8 @@ class ExcelMapperTests(unittest.TestCase):
             folder = Path(temp_dir)
             project = folder / "手工方案.txt"
             project.write_text(
-                "{来源.xlsx//数据//A1 => 目标.xlsx//模板//B2,C2}\n"
-                "（来源.xlsx｜数据｜C3 >> 目标.xlsx｜模板｜同位置）\n",
+                "{来源.xlsx;数据;A1 => 目标.xlsx;模板;B2,C2}\n"
+                "（来源.xlsx；数据；C3-C5 >> 目标.xlsx；模板；同位置）\n",
                 encoding="utf-8-sig",
             )
 
@@ -227,14 +227,15 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertEqual(sources, [(folder / "来源.xlsx").resolve()])
             self.assertEqual(targets, [(folder / "目标.xlsx").resolve()])
             self.assertEqual(rules[0].mode, excel_mapper.MODE_ONE_TO_MANY)
-            self.assertEqual(rules[1].target_cells, ["C3"])
+            self.assertEqual(rules[1].source_cells, ["C3", "C4", "C5"])
+            self.assertEqual(rules[1].target_cells, ["C3", "C4", "C5"])
             self.assertEqual(output, (folder / "映射结果").resolve())
 
     def test_txt_project_rejects_unmatched_brackets(self) -> None:
         with TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "错误方案.txt"
             project.write_text(
-                "【来源.xlsx｜数据｜A1 → 目标.xlsx｜模板｜A1]\n",
+                "【来源.xlsx；数据；A1 → 目标.xlsx；模板；A1]\n",
                 encoding="utf-8-sig",
             )
             with self.assertRaisesRegex(ValueError, "括号不匹配"):
