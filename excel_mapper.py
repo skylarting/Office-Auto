@@ -51,21 +51,21 @@ PROJECT_BRACKETS = {
 }
 PROJECT_DIRECTION_RE = re.compile(r"\s*(?:→|->|=>|>>|》)\s*")
 PROJECT_FIELD_RE = re.compile(r"\s*[；;]\s*")
-TXT_EXAMPLE = """每行填写一条映射：
-
+TXT_EXAMPLE = """【来源工作簿.xlsx；来源工作表名称；A1,A2,A3 → 目标工作簿.xlsx；目标工作表名称；A1,A2,A3】
 【测试数据.xlsx；汇总；A1,B3,D5 → 目标.xlsx；Sheet1；同位置】
 【测试数据.xlsx；数据；B3-B6 → 目标.xlsx；Sheet2；A1-D1】
 【C:\\业务资料\\来源.xlsx；统计表；C3-C8 → D:\\报表模板\\目标.xlsx；汇总；E3-E8】
+"""
 
-说明：
-1. 每一侧依次填写：工作簿；工作表；单元格。
+TXT_INSTRUCTIONS = """说明：
+1. 每行填写一条映射，每一侧依次填写：工作簿；工作表；单元格。
 2. 字段可使用中文分号“；”或英文分号“;”。
 3. B3-B6、A1-D1 表示连续范围。
 4. “同位置”表示写入地址与读取地址相同。
-5. 只写文件名时，工作簿应与 TXT 方案放在同一文件夹。
+5. 只写文件名时，工作簿应位于“方案基准文件夹”中。
 6. 外层括号支持：【】、[]、{}、()、（）和〔〕。
 7. 方向箭头支持：→、->、=>、>> 和 》。
-8. 输出默认保存在 TXT 所在文件夹的“映射结果”文件夹。
+8. 输出默认保存在方案基准文件夹的“映射结果”文件夹。
 """
 
 
@@ -410,10 +410,18 @@ def save_mapping_project(
     path: Path,
     rules: list[MappingRule],
 ) -> None:
+    text = serialize_mapping_project(rules, path.parent)
+    path.write_text(text, encoding="utf-8-sig")
+
+
+def serialize_mapping_project(
+    rules: list[MappingRule],
+    base_folder: Path,
+) -> str:
     lines: list[str] = []
     for rule in rules:
-        source_file = format_project_path(Path(rule.source_file), path.parent)
-        target_file = format_project_path(Path(rule.target_file), path.parent)
+        source_file = format_project_path(Path(rule.source_file), base_folder)
+        target_file = format_project_path(Path(rule.target_file), base_folder)
         target_cells = (
             "同位置"
             if rule.source_cells == rule.target_cells
@@ -426,20 +434,29 @@ def save_mapping_project(
                 f"{target_file}；{rule.target_sheet}；{target_cells}】"
             )
         )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def load_mapping_project(
     path: Path,
 ) -> tuple[list[Path], list[Path], list[MappingRule], Path]:
+    sources, targets, rules = parse_mapping_project_text(
+        path.read_text(encoding="utf-8-sig"),
+        path.parent,
+    )
+    return sources, targets, rules, (path.parent / "映射结果").resolve()
+
+
+def parse_mapping_project_text(
+    text: str,
+    base_folder: Path,
+) -> tuple[list[Path], list[Path], list[MappingRule]]:
     sources: list[Path] = []
     targets: list[Path] = []
     rules: list[MappingRule] = []
-    base_folder = path.parent
-    output_folder = (base_folder / "映射结果").resolve()
 
     for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8-sig").splitlines(),
+        text.lstrip("\ufeff").splitlines(),
         start=1,
     ):
         line = raw_line.strip()
@@ -487,7 +504,7 @@ def load_mapping_project(
             targets.append(target_path)
     if not rules:
         raise ValueError("方案文件中没有映射关系。")
-    return sources, targets, rules, output_folder
+    return sources, targets, rules
 
 
 def resolve_project_path(text: str, base_folder: Path) -> Path:
@@ -1211,6 +1228,12 @@ class MapperApp:
         self.output_folder = StringVar()
         self.status = StringVar(value="请添加来源工作簿和目标工作簿。")
         self.progress_text = StringVar(value="0%")
+        self.txt_base_folder = StringVar()
+        self.txt_status = StringVar(value="尚未生成或导入 TXT 方案。")
+        self._active_workflow_tab = 0
+        self._switching_workflow_tab = False
+        self._updating_txt_editor = False
+        self._txt_dirty = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -1222,7 +1245,18 @@ class MapperApp:
         content = ttk.Frame(container)
         content.pack(fill=BOTH, expand=True)
 
-        file_row = ttk.Frame(content)
+        self.workflow_notebook = ttk.Notebook(content)
+        self.workflow_notebook.pack(fill=BOTH, expand=True)
+        manual_tab = ttk.Frame(self.workflow_notebook, padding=10)
+        txt_tab = ttk.Frame(self.workflow_notebook, padding=12)
+        self.workflow_notebook.add(manual_tab, text="手动设置")
+        self.workflow_notebook.add(txt_tab, text="TXT 方案")
+        self.workflow_notebook.bind(
+            "<<NotebookTabChanged>>",
+            self._workflow_tab_changed,
+        )
+
+        file_row = ttk.Frame(manual_tab)
         file_row.pack(fill=X)
         file_row.columnconfigure(0, weight=1, uniform="files")
         file_row.columnconfigure(2, weight=1, uniform="files")
@@ -1256,19 +1290,13 @@ class MapperApp:
         )
 
         mapping_frame = ttk.LabelFrame(
-            content,
+            manual_tab,
             text="3. 映射关系",
             padding=10,
         )
         mapping_frame.pack(fill=X, pady=(10, 0))
-        self.mapping_notebook = ttk.Notebook(mapping_frame)
-        self.mapping_notebook.pack(fill=X)
-        manual_tab = ttk.Frame(self.mapping_notebook, padding=8)
-        txt_tab = ttk.Frame(self.mapping_notebook, padding=12)
-        self.mapping_notebook.add(manual_tab, text="手动设置")
-        self.mapping_notebook.add(txt_tab, text="TXT 方案")
 
-        mapping_table = ttk.Frame(manual_tab)
+        mapping_table = ttk.Frame(mapping_frame)
         mapping_table.pack(fill=X)
         mapping_table.columnconfigure(0, weight=1)
         self.mapping_tree = ttk.Treeview(
@@ -1302,7 +1330,7 @@ class MapperApp:
             "<Double-1>",
             lambda _event: self._edit_rule(),
         )
-        mapping_actions = ttk.Frame(manual_tab)
+        mapping_actions = ttk.Frame(mapping_frame)
         mapping_actions.pack(fill=X, pady=(8, 0))
         for text, command in (
             ("添加映射", self._add_rule),
@@ -1318,24 +1346,67 @@ class MapperApp:
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
-        ttk.Label(
-            txt_tab,
-            text=(
-                "使用 TXT 方案可以批量维护映射。载入后会自动切回"
-                "“手动设置”页面，便于核对。"
-            ),
-        ).pack(anchor=W)
+        base_row = ttk.Frame(txt_tab)
+        base_row.pack(fill=X)
+        ttk.Label(base_row, text="方案基准文件夹：").pack(side=LEFT)
+        ttk.Entry(
+            base_row,
+            textvariable=self.txt_base_folder,
+        ).pack(side=LEFT, fill=X, expand=True)
+        ttk.Button(
+            base_row,
+            text="选择文件夹…",
+            command=self._browse_txt_base,
+        ).pack(side=LEFT, padx=(8, 0))
+
         plan_actions = ttk.Frame(txt_tab)
-        plan_actions.pack(fill=X, pady=(12, 0))
+        plan_actions.pack(fill=X, pady=(10, 6))
         for text, command in (
-            ("载入 TXT 方案", self._load_project),
-            ("保存当前映射为 TXT", self._save_project),
-            ("查看 TXT 格式示例", self._show_txt_example),
+            ("导入 TXT 方案", self._load_project),
+            ("保存 TXT 方案", self._save_project),
+            ("格式示例", self._show_txt_example),
         ):
             ttk.Button(plan_actions, text=text, command=command).pack(
                 side=LEFT,
                 padx=(0, 6),
             )
+        ttk.Button(
+            plan_actions,
+            text="清空内容",
+            command=self._clear_txt_content,
+        ).pack(side=RIGHT)
+
+        ttk.Label(txt_tab, text="方案内容：").pack(anchor=W)
+        txt_editor_frame = ttk.Frame(txt_tab)
+        txt_editor_frame.pack(fill=BOTH, expand=True, pady=(3, 0))
+        self.txt_editor = Text(
+            txt_editor_frame,
+            wrap="none",
+            font=("TkFixedFont", 10),
+            undo=True,
+        )
+        self.txt_editor.pack(side=LEFT, fill=BOTH, expand=True)
+        txt_vertical = ttk.Scrollbar(
+            txt_editor_frame,
+            orient="vertical",
+            command=self.txt_editor.yview,
+        )
+        txt_vertical.pack(side=RIGHT, fill="y")
+        txt_horizontal = ttk.Scrollbar(
+            txt_tab,
+            orient="horizontal",
+            command=self.txt_editor.xview,
+        )
+        txt_horizontal.pack(fill=X)
+        self.txt_editor.configure(
+            yscrollcommand=txt_vertical.set,
+            xscrollcommand=txt_horizontal.set,
+        )
+        self.txt_editor.bind("<<Modified>>", self._txt_editor_modified)
+        ttk.Label(
+            txt_tab,
+            textvariable=self.txt_status,
+        ).pack(anchor=W, pady=(8, 0))
 
         output_frame = ttk.LabelFrame(
             fixed_bottom,
@@ -1692,18 +1763,165 @@ class MapperApp:
         if selected:
             self.output_folder.set(selected)
 
+    def _browse_txt_base(self) -> None:
+        selected = filedialog.askdirectory(title="选择方案基准文件夹")
+        if not selected:
+            return
+        self.txt_base_folder.set(selected)
+        if not self.output_folder.get().strip():
+            self.output_folder.set(str(Path(selected) / "映射结果"))
+        self._txt_dirty = True
+        self.txt_status.set("基准文件夹已更改，切换页签时将自动检查。")
+
+    def _txt_editor_modified(self, _event=None) -> None:
+        if self._updating_txt_editor:
+            self.txt_editor.edit_modified(False)
+            return
+        if self.txt_editor.edit_modified():
+            self._txt_dirty = True
+            self.txt_status.set("TXT 内容已修改，切换页签时将自动检查。")
+            self.txt_editor.edit_modified(False)
+
+    def _set_txt_text(self, text: str) -> None:
+        self._updating_txt_editor = True
+        try:
+            self.txt_editor.delete("1.0", END)
+            self.txt_editor.insert("1.0", text)
+            self.txt_editor.edit_modified(False)
+        finally:
+            self._updating_txt_editor = False
+
+    def _default_txt_base_folder(self) -> Path | None:
+        configured = self.txt_base_folder.get().strip()
+        if configured:
+            return Path(configured).resolve()
+        files = self.source_files + self.target_files
+        if files:
+            return files[0].parent.resolve()
+        return None
+
+    def _sync_manual_to_txt(self) -> None:
+        base_folder = self._default_txt_base_folder()
+        if base_folder is None:
+            self._set_txt_text("")
+            self.txt_status.set("请先在“手动设置”中添加工作簿和映射关系。")
+            self._txt_dirty = False
+            return
+        self.txt_base_folder.set(str(base_folder))
+        self._set_txt_text(serialize_mapping_project(self.rules, base_folder))
+        self._txt_dirty = False
+        if self.rules:
+            self.txt_status.set(
+                f"已从手动设置自动生成，共 {len(self.rules)} 条映射。"
+            )
+        else:
+            self.txt_status.set("尚无映射关系，TXT 内容为空。")
+
+    def _apply_txt_to_manual(self, show_message: bool = True) -> bool:
+        base_text = self.txt_base_folder.get().strip()
+        if not base_text:
+            message = "请先选择方案基准文件夹。"
+            self.txt_status.set(message)
+            if show_message:
+                messagebox.showerror("TXT 方案无法应用", message, parent=self.root)
+            return False
+        try:
+            sources, targets, rules = parse_mapping_project_text(
+                self.txt_editor.get("1.0", END),
+                Path(base_text).resolve(),
+            )
+            _expanded, warnings = validate_mapping_plan(
+                sources,
+                targets,
+                rules,
+            )
+        except Exception as exc:
+            message = str(exc)
+            self.txt_status.set(f"检查失败：{message}")
+            if show_message:
+                messagebox.showerror(
+                    "TXT 方案无法应用",
+                    message,
+                    parent=self.root,
+                )
+            return False
+
+        self.source_files = sources
+        self.target_files = targets
+        self.rules = rules
+        self.output_folder.set(str(Path(base_text).resolve() / "映射结果"))
+        self._refresh_file_tree(self.source_tree, self.source_files)
+        self._refresh_file_tree(self.target_tree, self.target_files)
+        self._refresh_rules()
+        self._txt_dirty = False
+        suffix = f"，发现 {len(warnings)} 个目标单元格已有内容" if warnings else ""
+        self.txt_status.set(f"TXT 方案已同步，共 {len(rules)} 条映射{suffix}。")
+        return True
+
+    def _workflow_tab_changed(self, _event=None) -> None:
+        if (
+            self._switching_workflow_tab
+            or not hasattr(self, "txt_editor")
+        ):
+            return
+        selected = self.workflow_notebook.index(
+            self.workflow_notebook.select()
+        )
+        if selected == self._active_workflow_tab:
+            return
+        if selected == 1:
+            self._sync_manual_to_txt()
+            self._active_workflow_tab = 1
+            return
+        if self._apply_txt_to_manual():
+            self._active_workflow_tab = 0
+            return
+        self._switching_workflow_tab = True
+        try:
+            self.workflow_notebook.select(1)
+            self._active_workflow_tab = 1
+        finally:
+            self._switching_workflow_tab = False
+
+    def _clear_txt_content(self) -> None:
+        if self.txt_editor.get("1.0", END).strip() and not messagebox.askyesno(
+            "清空 TXT 内容",
+            "确定清空当前 TXT 方案内容吗？",
+            parent=self.root,
+        ):
+            return
+        self._set_txt_text("")
+        self._txt_dirty = True
+        self.txt_status.set("TXT 内容已清空，尚未同步到手动设置。")
+
     def _show_txt_example(self) -> None:
         window = Toplevel(self.root)
         window.title("TXT 映射方案格式示例")
-        window.geometry("780x390")
-        window.minsize(650, 330)
+        window.geometry("820x540")
+        window.minsize(680, 430)
         window.transient(self.root)
         container = ttk.Frame(window, padding=12)
         container.pack(fill=BOTH, expand=True)
-        example = Text(container, wrap="word", font=("TkFixedFont", 10))
+        ttk.Label(container, text="示例文件内容：").pack(anchor=W)
+        example = Text(
+            container,
+            wrap="none",
+            font=("TkFixedFont", 10),
+            height=7,
+        )
         example.insert("1.0", TXT_EXAMPLE)
         example.configure(state="disabled")
-        example.pack(fill=BOTH, expand=True)
+        example.pack(fill=BOTH, expand=True, pady=(3, 10))
+        ttk.Label(container, text="填写说明：").pack(anchor=W)
+        instructions = Text(
+            container,
+            wrap="word",
+            font=("TkDefaultFont", 10),
+            height=10,
+        )
+        instructions.insert("1.0", TXT_INSTRUCTIONS)
+        instructions.configure(state="disabled")
+        instructions.pack(fill=BOTH, expand=True, pady=(3, 0))
         actions = ttk.Frame(container)
         actions.pack(fill=X, pady=(8, 0))
 
@@ -1724,38 +1942,52 @@ class MapperApp:
         ).pack(side=LEFT, padx=(8, 0))
 
     def _save_project(self) -> None:
+        if (
+            self.workflow_notebook.index(self.workflow_notebook.select()) == 1
+            and not self._apply_txt_to_manual()
+        ):
+            return
+        if not self.rules:
+            messagebox.showerror(
+                "没有映射关系",
+                "请先添加或导入至少一条映射关系。",
+                parent=self.root,
+            )
+            return
         selected = filedialog.asksaveasfilename(
             title="保存 TXT 映射方案",
             defaultextension=".txt",
             filetypes=[("TXT 映射方案", "*.txt"), ("所有文件", "*.*")],
         )
         if selected:
-            save_mapping_project(
-                Path(selected),
-                self.rules,
+            path = Path(selected)
+            save_mapping_project(path, self.rules)
+            self.txt_base_folder.set(str(path.parent.resolve()))
+            self._set_txt_text(
+                serialize_mapping_project(self.rules, path.parent.resolve())
             )
+            self._txt_dirty = False
+            self.txt_status.set(f"TXT 方案已保存：{path.name}")
 
     def _load_project(self) -> None:
         selected = filedialog.askopenfilename(
-            title="载入 TXT 映射方案",
+            title="导入 TXT 映射方案",
             filetypes=[("TXT 映射方案", "*.txt"), ("所有文件", "*.*")],
         )
         if not selected:
             return
         try:
-            (
-                self.source_files,
-                self.target_files,
-                self.rules,
-                output_folder,
-            ) = load_mapping_project(Path(selected))
-            self.output_folder.set(str(output_folder))
-            self._refresh_file_tree(self.source_tree, self.source_files)
-            self._refresh_file_tree(self.target_tree, self.target_files)
-            self._refresh_rules()
-            self.mapping_notebook.select(0)
+            path = Path(selected)
+            self.txt_base_folder.set(str(path.parent.resolve()))
+            self._set_txt_text(path.read_text(encoding="utf-8-sig"))
+            self._txt_dirty = True
+            if self._apply_txt_to_manual():
+                self.txt_status.set(
+                    f"已导入并同步 {path.name}，共 {len(self.rules)} 条映射。"
+                )
         except Exception as exc:
-            messagebox.showerror("载入失败", str(exc), parent=self.root)
+            self.txt_status.set(f"导入失败：{exc}")
+            messagebox.showerror("导入失败", str(exc), parent=self.root)
 
     @staticmethod
     def _refresh_file_tree(tree, files: list[Path]) -> None:
@@ -1799,6 +2031,11 @@ class MapperApp:
         self.root.update_idletasks()
 
     def _run(self) -> None:
+        if (
+            self.workflow_notebook.index(self.workflow_notebook.select()) == 1
+            and not self._apply_txt_to_manual()
+        ):
+            return
         if not self.output_folder.get().strip():
             messagebox.showerror(
                 "缺少输出位置",
