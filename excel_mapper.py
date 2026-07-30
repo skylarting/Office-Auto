@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import re
 import shutil
 from tkinter import (
     BOTH,
@@ -12,6 +13,7 @@ from tkinter import (
     RIGHT,
     W,
     X,
+    Canvas,
     StringVar,
     Tk,
     Toplevel,
@@ -38,9 +40,16 @@ from export_summary import (
 MODE_SEQUENCE = "按顺序一一对应"
 MODE_ONE_TO_MANY = "一个来源写入多个目标"
 MODE_MANUAL = "逐条手动设置"
-TXT_HEADER = (
-    "来源文件|来源工作表|来源单元格|目标文件|目标工作表|目标单元格"
-)
+PROJECT_BRACKETS = {
+    "【": "】",
+    "[": "]",
+    "{": "}",
+    "(": ")",
+    "（": "）",
+    "〔": "〕",
+}
+PROJECT_DIRECTION_RE = re.compile(r"\s*(?:→|->|=>|>>|》)\s*")
+PROJECT_FIELD_RE = re.compile(r"\s*(?:｜|\||//)\s*")
 
 
 @dataclass
@@ -387,24 +396,27 @@ def save_mapping_project(
     rules: list[MappingRule],
     output_folder: Path | None,
 ) -> None:
-    lines = [
-        "# Excel 单元格映射方案",
-        "# 每行一条映射；多个单元格使用英文逗号分隔。",
-        "# 数量相同时按顺序对应；一个来源可写入多个目标。",
-        f"输出文件夹={output_folder or ''}",
-        TXT_HEADER,
-    ]
+    lines: list[str] = []
+    if output_folder:
+        lines.extend(
+            [
+                f"输出【{format_project_path(output_folder, path.parent)}】",
+                "",
+            ]
+        )
     for rule in rules:
+        source_file = format_project_path(Path(rule.source_file), path.parent)
+        target_file = format_project_path(Path(rule.target_file), path.parent)
+        target_cells = (
+            "同位置"
+            if rule.source_cells == rule.target_cells
+            else ",".join(rule.target_cells)
+        )
         lines.append(
-            "|".join(
-                [
-                    rule.source_file,
-                    rule.source_sheet,
-                    ",".join(rule.source_cells),
-                    rule.target_file,
-                    rule.target_sheet,
-                    ",".join(rule.target_cells),
-                ]
+            (
+                f"【{source_file}｜{rule.source_sheet}｜"
+                f"{','.join(rule.source_cells)} → "
+                f"{target_file}｜{rule.target_sheet}｜{target_cells}】"
             )
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
@@ -424,32 +436,44 @@ def load_mapping_project(
         start=1,
     ):
         line = raw_line.strip()
-        if not line or line.startswith("#") or line == TXT_HEADER:
+        if not line or line.startswith("#"):
             continue
-        if line.startswith("输出文件夹="):
-            output_text = line.split("=", 1)[1].strip()
-            if output_text:
-                output_folder = resolve_project_path(output_text, base_folder)
+        if line.startswith("输出"):
+            output_text = extract_bracketed_text(line[2:], line_number)
+            output_folder = resolve_project_path(output_text, base_folder)
             continue
-        fields = [field.strip() for field in line.split("|")]
-        if len(fields) != 6:
+        content = extract_bracketed_text(line, line_number)
+        direction_parts = PROJECT_DIRECTION_RE.split(content, maxsplit=1)
+        if len(direction_parts) != 2:
             raise ValueError(
-                f"第 {line_number} 行格式错误：应包含 6 个由 | 分隔的字段。"
+                f"第 {line_number} 行缺少读取和写入之间的箭头 →。"
+            )
+        source_fields = PROJECT_FIELD_RE.split(direction_parts[0])
+        target_fields = PROJECT_FIELD_RE.split(direction_parts[1])
+        if len(source_fields) != 3 or len(target_fields) != 3:
+            raise ValueError(
+                f"第 {line_number} 行格式错误。正确格式为："
+                "【工作簿｜工作表｜单元格 → 工作簿｜工作表｜单元格】"
             )
         try:
-            source_path = resolve_project_path(fields[0], base_folder)
-            target_path = resolve_project_path(fields[3], base_folder)
-            source_cells = parse_cell_addresses(fields[2])
-            target_cells = parse_cell_addresses(fields[5])
+            source_path = resolve_project_path(source_fields[0], base_folder)
+            target_path = resolve_project_path(target_fields[0], base_folder)
+            source_cells = parse_cell_addresses(source_fields[2])
+            target_text = target_fields[2].strip()
+            target_cells = (
+                list(source_cells)
+                if target_text in ("", "同位置", "与读取单元格相同")
+                else parse_cell_addresses(target_text)
+            )
             mode = infer_mapping_mode(source_cells, target_cells)
         except ValueError as exc:
             raise ValueError(f"第 {line_number} 行：{exc}") from exc
         rule = MappingRule(
             source_file=str(source_path),
-            source_sheet=fields[1],
+            source_sheet=source_fields[1].strip(),
             source_cells=source_cells,
             target_file=str(target_path),
-            target_sheet=fields[4],
+            target_sheet=target_fields[1].strip(),
             target_cells=target_cells,
             mode=mode,
         )
@@ -464,8 +488,350 @@ def load_mapping_project(
 
 
 def resolve_project_path(text: str, base_folder: Path) -> Path:
-    path = Path(text)
+    path = Path(text.strip())
     return path if path.is_absolute() else (base_folder / path).resolve()
+
+
+def format_project_path(path: Path, base_folder: Path) -> str:
+    path = path.resolve()
+    base_folder = base_folder.resolve()
+    if path.parent == base_folder:
+        return path.name
+    return str(path)
+
+
+def extract_bracketed_text(text: str, line_number: int) -> str:
+    text = text.strip()
+    if not text or text[0] not in PROJECT_BRACKETS:
+        raise ValueError(f"第 {line_number} 行需要使用括号包住内容。")
+    expected = PROJECT_BRACKETS[text[0]]
+    if not text.endswith(expected):
+        raise ValueError(
+            f"第 {line_number} 行括号不匹配，应以 {expected} 结束。"
+        )
+    return text[1:-1].strip()
+
+
+def column_number_to_letters(number: int) -> str:
+    result = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def cell_sort_key(address: str) -> tuple[int, int]:
+    row, column = split_address(address)
+    return row, column
+
+
+class CellPickerDialog:
+    ROW_HEIGHT = 28
+    COLUMN_WIDTH = 105
+    HEADER_HEIGHT = 30
+    ROW_HEADER_WIDTH = 48
+
+    def __init__(
+        self,
+        parent,
+        workbook_path: Path,
+        sheet_name: str,
+        initial_cells: list[str],
+    ) -> None:
+        self.result: list[str] | None = None
+        self.path = workbook_path
+        self.sheet_name = sheet_name
+        self.selected = set(initial_cells)
+        self.anchor: tuple[int, int] | None = None
+        self.rows = max(
+            50,
+            max((cell_sort_key(item)[0] + 1 for item in initial_cells), default=0),
+        )
+        self.columns = max(
+            16,
+            max((cell_sort_key(item)[1] + 1 for item in initial_cells), default=0),
+        )
+        self.reader = WorkbookReader(workbook_path)
+
+        self.window = Toplevel(parent)
+        self.window.title(f"选择单元格 — {workbook_path.name} / {sheet_name}")
+        self.window.geometry("900x620")
+        self.window.minsize(720, 500)
+        self.window.transient(parent)
+        self.window.grab_set()
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        self.selected_text = StringVar()
+        self.jump_text = StringVar()
+        container = ttk.Frame(self.window, padding=12)
+        container.pack(fill=BOTH, expand=True)
+
+        top = ttk.Frame(container)
+        top.pack(fill=X)
+        ttk.Label(top, text="已选择：").pack(side=LEFT)
+        ttk.Label(top, textvariable=self.selected_text).pack(
+            side=LEFT,
+            fill=X,
+            expand=True,
+        )
+        ttk.Button(top, text="清空", command=self._clear).pack(side=RIGHT)
+        ttk.Button(top, text="跳转", command=self._jump).pack(
+            side=RIGHT,
+            padx=(6, 0),
+        )
+        jump_entry = ttk.Entry(top, textvariable=self.jump_text, width=9)
+        jump_entry.pack(side=RIGHT)
+        ttk.Label(top, text="定位到：").pack(side=RIGHT, padx=(10, 4))
+        jump_entry.bind("<Return>", lambda _event: self._jump())
+
+        ttk.Label(
+            container,
+            text="单击选择或取消；按住鼠标拖动可选择连续区域。",
+        ).pack(anchor=W, pady=(6, 8))
+
+        table = ttk.Frame(container)
+        table.pack(fill=BOTH, expand=True)
+        table.rowconfigure(1, weight=1)
+        table.columnconfigure(1, weight=1)
+        self.corner = Canvas(
+            table,
+            width=self.ROW_HEADER_WIDTH,
+            height=self.HEADER_HEIGHT,
+            highlightthickness=1,
+        )
+        self.corner.grid(row=0, column=0, sticky="nsew")
+        self.column_header = Canvas(
+            table,
+            height=self.HEADER_HEIGHT,
+            highlightthickness=1,
+        )
+        self.column_header.grid(row=0, column=1, sticky="ew")
+        self.row_header = Canvas(
+            table,
+            width=self.ROW_HEADER_WIDTH,
+            highlightthickness=1,
+        )
+        self.row_header.grid(row=1, column=0, sticky="ns")
+        self.grid_canvas = Canvas(table, background="white", highlightthickness=1)
+        self.grid_canvas.grid(row=1, column=1, sticky="nsew")
+
+        horizontal = ttk.Scrollbar(
+            table,
+            orient="horizontal",
+            command=self._xview,
+        )
+        horizontal.grid(row=2, column=1, sticky="ew")
+        vertical = ttk.Scrollbar(
+            table,
+            orient="vertical",
+            command=self._yview,
+        )
+        vertical.grid(row=1, column=2, sticky="ns")
+        self.grid_canvas.configure(
+            xscrollcommand=horizontal.set,
+            yscrollcommand=vertical.set,
+        )
+        self.grid_canvas.bind("<Button-1>", self._press)
+        self.grid_canvas.bind("<ButtonRelease-1>", self._release)
+        self.grid_canvas.bind("<MouseWheel>", self._mousewheel)
+        self.grid_canvas.bind("<Shift-MouseWheel>", self._shift_mousewheel)
+
+        actions = ttk.Frame(container)
+        actions.pack(fill=X, pady=(10, 0))
+        ttk.Button(actions, text="确定选择", command=self._confirm).pack(
+            side=LEFT,
+        )
+        ttk.Button(actions, text="取消", command=self._cancel).pack(
+            side=LEFT,
+            padx=(8, 0),
+        )
+
+        self._draw()
+        self._update_selected_text()
+        parent.wait_window(self.window)
+
+    def _draw(self) -> None:
+        self.column_header.delete("all")
+        self.row_header.delete("all")
+        self.grid_canvas.delete("all")
+        width = self.columns * self.COLUMN_WIDTH
+        height = self.rows * self.ROW_HEIGHT
+        self.column_header.configure(scrollregion=(0, 0, width, self.HEADER_HEIGHT))
+        self.row_header.configure(scrollregion=(0, 0, self.ROW_HEADER_WIDTH, height))
+        self.grid_canvas.configure(scrollregion=(0, 0, width, height))
+
+        for column in range(self.columns):
+            x1 = column * self.COLUMN_WIDTH
+            x2 = x1 + self.COLUMN_WIDTH
+            self.column_header.create_rectangle(
+                x1,
+                0,
+                x2,
+                self.HEADER_HEIGHT,
+                fill="#edf2f7",
+                outline="#b8c2cc",
+            )
+            self.column_header.create_text(
+                (x1 + x2) / 2,
+                self.HEADER_HEIGHT / 2,
+                text=column_number_to_letters(column + 1),
+            )
+        for row in range(self.rows):
+            y1 = row * self.ROW_HEIGHT
+            y2 = y1 + self.ROW_HEIGHT
+            self.row_header.create_rectangle(
+                0,
+                y1,
+                self.ROW_HEADER_WIDTH,
+                y2,
+                fill="#edf2f7",
+                outline="#b8c2cc",
+            )
+            self.row_header.create_text(
+                self.ROW_HEADER_WIDTH / 2,
+                (y1 + y2) / 2,
+                text=str(row + 1),
+            )
+            for column in range(self.columns):
+                self._draw_cell(row, column)
+
+    def _draw_cell(self, row: int, column: int) -> None:
+        address = f"{column_number_to_letters(column + 1)}{row + 1}"
+        x1 = column * self.COLUMN_WIDTH
+        y1 = row * self.ROW_HEIGHT
+        fill = "#cfe8ff" if address in self.selected else "white"
+        self.grid_canvas.create_rectangle(
+            x1,
+            y1,
+            x1 + self.COLUMN_WIDTH,
+            y1 + self.ROW_HEIGHT,
+            fill=fill,
+            outline="#d6dce2",
+            tags=(f"cell-{address}",),
+        )
+        try:
+            value = self.reader.read(self.sheet_name, address).value
+        except Exception:
+            value = ""
+        text = "" if value is None else str(value).replace("\n", " ")
+        if len(text) > 14:
+            text = text[:13] + "…"
+        self.grid_canvas.create_text(
+            x1 + 5,
+            y1 + self.ROW_HEIGHT / 2,
+            text=text,
+            anchor=W,
+            tags=(f"cell-{address}",),
+        )
+
+    def _refresh_cell(self, row: int, column: int) -> None:
+        address = f"{column_number_to_letters(column + 1)}{row + 1}"
+        self.grid_canvas.delete(f"cell-{address}")
+        self._draw_cell(row, column)
+
+    def _event_cell(self, event) -> tuple[int, int]:
+        x = self.grid_canvas.canvasx(event.x)
+        y = self.grid_canvas.canvasy(event.y)
+        column = max(0, min(self.columns - 1, int(x // self.COLUMN_WIDTH)))
+        row = max(0, min(self.rows - 1, int(y // self.ROW_HEIGHT)))
+        return row, column
+
+    def _press(self, event) -> None:
+        self.anchor = self._event_cell(event)
+
+    def _release(self, event) -> None:
+        if self.anchor is None:
+            return
+        end_row, end_column = self._event_cell(event)
+        start_row, start_column = self.anchor
+        cells = [
+            (row, column)
+            for row in range(min(start_row, end_row), max(start_row, end_row) + 1)
+            for column in range(
+                min(start_column, end_column),
+                max(start_column, end_column) + 1,
+            )
+        ]
+        addresses = [
+            f"{column_number_to_letters(column + 1)}{row + 1}"
+            for row, column in cells
+        ]
+        if len(addresses) == 1 and addresses[0] in self.selected:
+            self.selected.remove(addresses[0])
+        else:
+            self.selected.update(addresses)
+        for row, column in cells:
+            self._refresh_cell(row, column)
+        self.anchor = None
+        self._update_selected_text()
+
+    def _xview(self, *args) -> None:
+        self.grid_canvas.xview(*args)
+        self.column_header.xview(*args)
+
+    def _yview(self, *args) -> None:
+        self.grid_canvas.yview(*args)
+        self.row_header.yview(*args)
+
+    def _mousewheel(self, event) -> None:
+        units = -1 if event.delta > 0 else 1
+        self._yview("scroll", units * 3, "units")
+
+    def _shift_mousewheel(self, event) -> None:
+        units = -1 if event.delta > 0 else 1
+        self._xview("scroll", units * 3, "units")
+
+    def _jump(self) -> None:
+        try:
+            address = parse_cell_addresses(self.jump_text.get())[0]
+            row, column = split_address(address)
+        except ValueError as exc:
+            messagebox.showerror("无法跳转", str(exc), parent=self.window)
+            return
+        needs_redraw = row >= self.rows or column >= self.columns
+        self.rows = max(self.rows, row + 20)
+        self.columns = max(self.columns, column + 8)
+        if needs_redraw:
+            self._draw()
+        width = max(self.columns * self.COLUMN_WIDTH, 1)
+        height = max(self.rows * self.ROW_HEIGHT, 1)
+        self._xview("moveto", max(0, column * self.COLUMN_WIDTH / width))
+        self._yview("moveto", max(0, row * self.ROW_HEIGHT / height))
+
+    def _clear(self) -> None:
+        previous = list(self.selected)
+        self.selected.clear()
+        for address in previous:
+            row, column = cell_sort_key(address)
+            if row < self.rows and column < self.columns:
+                self._refresh_cell(row, column)
+        self._update_selected_text()
+
+    def _update_selected_text(self) -> None:
+        ordered = sorted(self.selected, key=cell_sort_key)
+        if not ordered:
+            text = "尚未选择"
+        elif len(ordered) <= 12:
+            text = "、".join(ordered)
+        else:
+            text = "、".join(ordered[:12]) + f"……（共 {len(ordered)} 个）"
+        self.selected_text.set(text)
+
+    def _confirm(self) -> None:
+        if not self.selected:
+            messagebox.showinfo(
+                "尚未选择",
+                "请至少选择一个单元格。",
+                parent=self.window,
+            )
+            return
+        self.result = sorted(self.selected, key=cell_sort_key)
+        self.reader.close()
+        self.window.destroy()
+
+    def _cancel(self) -> None:
+        self.reader.close()
+        self.window.destroy()
 
 
 class MappingDialog:
@@ -475,37 +841,40 @@ class MappingDialog:
         source_files: list[Path],
         target_files: list[Path],
         initial: MappingRule | None = None,
+        defaults: MappingRule | None = None,
     ) -> None:
         self.result: MappingRule | None = None
         self.source_files = source_files
         self.target_files = target_files
         self.window = Toplevel(parent)
         self.window.title("设置映射关系")
-        self.window.geometry("650x350")
+        self.window.geometry("760x370")
         self.window.resizable(False, False)
         self.window.transient(parent)
         self.window.grab_set()
 
+        base = initial or defaults
         self.source_file = StringVar(
-            value=initial.source_file if initial else str(source_files[0])
+            value=base.source_file if base else str(source_files[0])
         )
         self.source_sheet = StringVar(
-            value=initial.source_sheet if initial else ""
+            value=base.source_sheet if base else ""
         )
         self.source_cells = StringVar(
             value=", ".join(initial.source_cells) if initial else ""
         )
         self.target_file = StringVar(
-            value=initial.target_file if initial else str(target_files[0])
+            value=base.target_file if base else str(target_files[0])
         )
         self.target_sheet = StringVar(
-            value=initial.target_sheet if initial else ""
+            value=base.target_sheet if base else ""
         )
         self.target_cells = StringVar(
             value=", ".join(initial.target_cells) if initial else ""
         )
         self._sync_target_cells = initial is None
         self._updating_target_cells = False
+        self._target_sheet_manually_selected = initial is not None
         container = ttk.Frame(self.window, padding=16)
         container.pack(fill=BOTH, expand=True)
         self.source_sheet_combo, self.source_cells_entry = self._location_group(
@@ -516,6 +885,7 @@ class MappingDialog:
             self.source_cells,
             source_files,
             0,
+            True,
         )
         self.target_sheet_combo, self.target_cells_entry = self._location_group(
             container,
@@ -525,13 +895,14 @@ class MappingDialog:
             self.target_cells,
             target_files,
             1,
+            False,
         )
 
         ttk.Label(
             container,
             text=(
-                "程序会自动判断：两边数量相同则按填写顺序对应；"
-                "一个来源可写入多个目标。新增时写入单元格默认跟随读取单元格。"
+                "通常只需选择左侧的读取单元格，右侧会自动填入相同位置；"
+                "如需写入其他位置，再修改右侧即可。"
             ),
         ).grid(row=2, column=0, columnspan=2, sticky=W, pady=(12, 0))
 
@@ -548,6 +919,8 @@ class MappingDialog:
 
         self._refresh_source_sheets()
         self._refresh_target_sheets()
+        if initial is None:
+            self._match_target_sheet()
         self.source_cells.trace_add("write", self._copy_source_cells_to_target)
         self.target_cells.trace_add("write", self._target_cells_changed)
         parent.wait_window(self.window)
@@ -561,6 +934,7 @@ class MappingDialog:
         cells_var: StringVar,
         files: list[Path],
         column: int,
+        is_source: bool,
     ):
         frame = ttk.LabelFrame(parent, text=title, padding=10)
         frame.grid(
@@ -584,20 +958,85 @@ class MappingDialog:
             state="readonly",
         )
         sheet_combo.pack(fill=X, pady=(2, 8))
-        ttk.Label(frame, text="单元格（逗号分隔）：").pack(anchor=W)
-        cells_entry = ttk.Entry(frame, textvariable=cells_var)
-        cells_entry.pack(fill=X, pady=(2, 0))
+        ttk.Label(
+            frame,
+            text="读取单元格：" if is_source else "写入单元格：",
+        ).pack(anchor=W)
+        cells_row = ttk.Frame(frame)
+        cells_row.pack(fill=X, pady=(2, 0))
+        cells_entry = ttk.Entry(cells_row, textvariable=cells_var)
+        cells_entry.pack(side=LEFT, fill=X, expand=True)
+        ttk.Button(
+            cells_row,
+            text="选择…",
+            command=lambda: self._pick_cells(is_source),
+        ).pack(side=LEFT, padx=(6, 0))
         if column == 0:
             file_combo.bind(
                 "<<ComboboxSelected>>",
-                lambda _event: self._refresh_source_sheets(),
+                lambda _event: self._source_file_selected(),
+            )
+            sheet_combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _event: self._source_sheet_selected(),
             )
         else:
             file_combo.bind(
                 "<<ComboboxSelected>>",
-                lambda _event: self._refresh_target_sheets(),
+                lambda _event: self._target_file_selected(),
+            )
+            sheet_combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _event: self._target_sheet_selected(),
             )
         return sheet_combo, cells_entry
+
+    def _pick_cells(self, is_source: bool) -> None:
+        file_var = self.source_file if is_source else self.target_file
+        sheet_var = self.source_sheet if is_source else self.target_sheet
+        cells_var = self.source_cells if is_source else self.target_cells
+        try:
+            initial = (
+                parse_cell_addresses(cells_var.get())
+                if cells_var.get().strip()
+                else []
+            )
+            dialog = CellPickerDialog(
+                self.window,
+                Path(file_var.get()),
+                sheet_var.get(),
+                initial,
+            )
+            if dialog.result:
+                cells_var.set(", ".join(dialog.result))
+        except Exception as exc:
+            messagebox.showerror(
+                "无法打开单元格选择器",
+                str(exc),
+                parent=self.window,
+            )
+
+    def _source_file_selected(self) -> None:
+        self._refresh_source_sheets()
+        self._source_sheet_selected()
+
+    def _source_sheet_selected(self) -> None:
+        if not self._target_sheet_manually_selected:
+            self._match_target_sheet()
+
+    def _target_file_selected(self) -> None:
+        self._target_sheet_manually_selected = False
+        self._refresh_target_sheets()
+        self._match_target_sheet()
+
+    def _target_sheet_selected(self) -> None:
+        self._target_sheet_manually_selected = True
+
+    def _match_target_sheet(self) -> None:
+        source_name = self.source_sheet.get()
+        target_names = list(self.target_sheet_combo.cget("values"))
+        if source_name and source_name in target_names:
+            self.target_sheet.set(source_name)
 
     def _copy_source_cells_to_target(self, *_args) -> None:
         if not self._sync_target_cells:
@@ -682,7 +1121,7 @@ class MapperApp:
         file_row = ttk.Frame(content)
         file_row.pack(fill=X)
         file_row.columnconfigure(0, weight=1, uniform="files")
-        file_row.columnconfigure(1, weight=1, uniform="files")
+        file_row.columnconfigure(2, weight=1, uniform="files")
         self.source_tree = self._file_panel(
             file_row,
             "1. 来源工作簿",
@@ -691,10 +1130,22 @@ class MapperApp:
             self._add_source_folder,
             self._remove_sources,
         )
+        transfer = ttk.Frame(file_row, padding=(8, 42))
+        transfer.grid(row=0, column=1, sticky="ns")
+        ttk.Button(
+            transfer,
+            text="移到目标 →",
+            command=self._move_sources_to_targets,
+        ).pack(fill=X, pady=(0, 8))
+        ttk.Button(
+            transfer,
+            text="← 移到来源",
+            command=self._move_targets_to_sources,
+        ).pack(fill=X)
         self.target_tree = self._file_panel(
             file_row,
             "2. 目标工作簿",
-            1,
+            2,
             self._add_targets,
             self._add_target_folder,
             self._remove_targets,
@@ -883,6 +1334,72 @@ class MapperApp:
     def _remove_targets(self) -> None:
         self._remove_files(self.target_files, self.target_tree)
 
+    def _move_sources_to_targets(self) -> None:
+        self._move_selected_files(
+            self.source_files,
+            self.source_tree,
+            self.target_files,
+            self.target_tree,
+            "source",
+        )
+
+    def _move_targets_to_sources(self) -> None:
+        self._move_selected_files(
+            self.target_files,
+            self.target_tree,
+            self.source_files,
+            self.source_tree,
+            "target",
+        )
+
+    def _move_selected_files(
+        self,
+        source_collection: list[Path],
+        source_tree,
+        target_collection: list[Path],
+        target_tree,
+        current_role: str,
+    ) -> None:
+        selected_items = source_tree.selection()
+        if not selected_items:
+            messagebox.showinfo(
+                "请先选择文件",
+                "请在列表中选中需要转移的工作簿。",
+                parent=self.root,
+            )
+            return
+        selected_paths = {
+            Path(source_tree.item(item, "values")[0])
+            for item in selected_items
+        }
+        used_paths = {
+            Path(
+                rule.source_file
+                if current_role == "source"
+                else rule.target_file
+            )
+            for rule in self.rules
+        }
+        blocked = selected_paths & used_paths
+        if blocked:
+            messagebox.showinfo(
+                "文件正在映射中",
+                "以下工作簿已经用于映射，请先删除或修改相关映射：\n"
+                + "\n".join(path.name for path in sorted(blocked)),
+                parent=self.root,
+            )
+            return
+        for path in selected_paths:
+            if path not in target_collection:
+                target_collection.append(path)
+        source_collection[:] = [
+            path for path in source_collection if path not in selected_paths
+        ]
+        self._refresh_file_tree(source_tree, source_collection)
+        self._refresh_file_tree(target_tree, target_collection)
+        if not self.output_folder.get() and self.target_files:
+            self.output_folder.set(str(self.target_files[0].parent / "映射结果"))
+
     @staticmethod
     def _remove_files(collection: list[Path], tree) -> None:
         selected = tree.selection()
@@ -909,6 +1426,7 @@ class MapperApp:
             self.root,
             self.source_files,
             self.target_files,
+            defaults=self.rules[-1] if self.rules else None,
         )
         if dialog.result:
             self.rules.append(dialog.result)
