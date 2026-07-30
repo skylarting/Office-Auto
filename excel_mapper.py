@@ -1666,6 +1666,8 @@ class MapperApp:
         self.progress_text = StringVar(value="0%")
         self.scheme_base_folder = StringVar()
         self.scheme_status = StringVar(value="尚未导入或生成 Excel 方案。")
+        self._scheme_editor = None
+        self._scheme_editor_context = None
         self._active_workflow_tab = 0
         self._configure_styles()
         self._build_ui()
@@ -1953,6 +1955,31 @@ class MapperApp:
             yscrollcommand=scheme_vertical.set,
             xscrollcommand=scheme_horizontal.set,
         )
+        self.scheme_tree.bind(
+            "<Double-1>",
+            self._begin_scheme_cell_edit,
+        )
+        self.scheme_tree.bind(
+            "<Return>",
+            self._begin_selected_scheme_cell_edit,
+        )
+        scheme_actions = ttk.Frame(scheme_group)
+        scheme_actions.pack(fill=X, pady=(8, 0))
+        for text, command in (
+            ("新增映射组", self._add_scheme_rule),
+            ("复制选中组", self._duplicate_scheme_rule),
+            ("删除选中组", self._delete_scheme_rule),
+        ):
+            ttk.Button(
+                scheme_actions,
+                text=text,
+                command=command,
+            ).pack(side=LEFT, padx=(0, 6))
+        ttk.Label(
+            scheme_actions,
+            text="双击工作簿、工作表或单元格即可直接编辑",
+            style="Muted.TLabel",
+        ).pack(side=RIGHT)
         ttk.Label(
             scheme_tab,
             textvariable=self.scheme_status,
@@ -2440,17 +2467,313 @@ class MapperApp:
         self.status.set(f"已应用 Excel 方案，共 {len(self.rules)} 组映射。")
         self._show_workflow_page(0)
 
+    def _selected_scheme_rule_index(self) -> int | None:
+        selected = self.scheme_tree.selection()
+        if not selected:
+            messagebox.showinfo(
+                "请选择映射组",
+                "请先选中任意一行。",
+                parent=self.root,
+            )
+            return None
+        try:
+            return int(selected[0].split(":")[1])
+        except (IndexError, ValueError):
+            return None
+
+    def _add_scheme_rule(self) -> None:
+        base = self._default_scheme_base_folder() or Path.cwd()
+        source_file = (
+            Path(self.scheme_rules[-1].source_file)
+            if self.scheme_rules
+            else base / "来源工作簿.xlsx"
+        )
+        target_file = (
+            Path(self.scheme_rules[-1].target_file)
+            if self.scheme_rules
+            else base / "目标工作簿.xlsx"
+        )
+        source_sheet = (
+            self.scheme_rules[-1].source_sheet
+            if self.scheme_rules
+            else "来源工作表"
+        )
+        target_sheet = (
+            self.scheme_rules[-1].target_sheet
+            if self.scheme_rules
+            else "目标工作表"
+        )
+        self.scheme_rules.append(
+            MappingRule(
+                str(source_file),
+                source_sheet,
+                ["A1"],
+                str(target_file),
+                target_sheet,
+                ["A1"],
+                MODE_MANUAL,
+            )
+        )
+        if not self.scheme_base_folder.get().strip():
+            self.scheme_base_folder.set(str(base))
+        self._refresh_scheme_tree()
+        iid = f"scheme:{len(self.scheme_rules) - 1}:source"
+        self.scheme_tree.selection_set(iid)
+        self.scheme_tree.focus(iid)
+        self.scheme_tree.see(iid)
+        self.scheme_status.set("已新增映射组；双击单元格可直接填写。")
+
+    def _duplicate_scheme_rule(self) -> None:
+        index = self._selected_scheme_rule_index()
+        if index is None:
+            return
+        self.scheme_rules.insert(
+            index + 1,
+            MappingRule(**asdict(self.scheme_rules[index])),
+        )
+        self._refresh_scheme_tree()
+        iid = f"scheme:{index + 1}:source"
+        self.scheme_tree.selection_set(iid)
+        self.scheme_tree.focus(iid)
+        self.scheme_tree.see(iid)
+        self.scheme_status.set("已复制映射组。")
+
+    def _delete_scheme_rule(self) -> None:
+        index = self._selected_scheme_rule_index()
+        if index is None:
+            return
+        if not messagebox.askyesno(
+            "删除映射组",
+            f"确定删除第 {index + 1} 组来源和目标吗？",
+            parent=self.root,
+        ):
+            return
+        self.scheme_rules.pop(index)
+        self._refresh_scheme_tree()
+        self.scheme_status.set("已删除映射组。")
+
+    def _begin_selected_scheme_cell_edit(self, _event=None) -> str:
+        selected = self.scheme_tree.selection()
+        if not selected:
+            return "break"
+        iid = selected[0]
+        self._open_scheme_editor(iid, "#3")
+        return "break"
+
+    def _begin_scheme_cell_edit(self, event) -> str:
+        region = self.scheme_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return "break"
+        iid = self.scheme_tree.identify_row(event.y)
+        column = self.scheme_tree.identify_column(event.x)
+        if iid and column in ("#3", "#4", "#5"):
+            self.scheme_tree.selection_set(iid)
+            self.scheme_tree.focus(iid)
+            self._open_scheme_editor(iid, column)
+        return "break"
+
+    def _scheme_editor_values(
+        self,
+        rule: MappingRule,
+        kind: str,
+        column: str,
+    ) -> tuple[str, list[str]]:
+        is_source = kind == "source"
+        if column == "#3":
+            path = Path(
+                rule.source_file if is_source else rule.target_file
+            )
+            return (
+                format_project_path(
+                    path,
+                    self._default_scheme_base_folder(),
+                ),
+                [],
+            )
+        if column == "#4":
+            path = Path(
+                rule.source_file if is_source else rule.target_file
+            )
+            current = (
+                rule.source_sheet if is_source else rule.target_sheet
+            )
+            try:
+                names = workbook_sheet_names(path) if path.exists() else []
+            except Exception:
+                names = []
+            return current, names
+        cells = rule.source_cells if is_source else rule.target_cells
+        if not is_source and cells == rule.source_cells:
+            return "同位置", []
+        return format_cell_addresses(cells), []
+
+    def _open_scheme_editor(self, iid: str, column: str) -> None:
+        self._cancel_scheme_editor()
+        try:
+            _, index_text, kind = iid.split(":")
+            index = int(index_text)
+            rule = self.scheme_rules[index]
+        except (ValueError, IndexError):
+            return
+        bbox = self.scheme_tree.bbox(iid, column)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        current, values = self._scheme_editor_values(rule, kind, column)
+        if column == "#4":
+            editor = ttk.Combobox(
+                self.scheme_tree,
+                values=values,
+                state="normal",
+            )
+            editor.set(current)
+        else:
+            editor = ttk.Entry(self.scheme_tree)
+            editor.insert(0, current)
+        editor.place(x=x, y=y, width=width, height=height)
+        editor.select_range(0, END)
+        editor.focus_set()
+        self._scheme_editor = editor
+        self._scheme_editor_context = (iid, column, index, kind)
+        editor.bind(
+            "<Return>",
+            lambda _event: self._commit_scheme_editor("next"),
+        )
+        editor.bind(
+            "<Tab>",
+            lambda _event: self._commit_scheme_editor("next"),
+        )
+        editor.bind(
+            "<Shift-Tab>",
+            lambda _event: self._commit_scheme_editor("previous"),
+        )
+        editor.bind(
+            "<Escape>",
+            lambda _event: self._cancel_scheme_editor(),
+        )
+        editor.bind(
+            "<FocusOut>",
+            lambda _event: self._commit_scheme_editor(None),
+        )
+
+    def _cancel_scheme_editor(self) -> str:
+        editor = self._scheme_editor
+        self._scheme_editor = None
+        self._scheme_editor_context = None
+        if editor is not None:
+            try:
+                editor.destroy()
+            except Exception:
+                pass
+        return "break"
+
+    def _commit_scheme_editor(self, move: str | None) -> str:
+        editor = self._scheme_editor
+        context = self._scheme_editor_context
+        if editor is None or context is None:
+            return "break"
+        iid, column, index, kind = context
+        value = editor.get().strip()
+        self._scheme_editor = None
+        self._scheme_editor_context = None
+        editor.destroy()
+        try:
+            rule = self.scheme_rules[index]
+            is_source = kind == "source"
+            if column == "#3":
+                if not value:
+                    raise ValueError("工作簿不能为空。")
+                path = resolve_project_path(
+                    value,
+                    self._default_scheme_base_folder() or Path.cwd(),
+                )
+                if is_source:
+                    rule.source_file = str(path)
+                else:
+                    rule.target_file = str(path)
+            elif column == "#4":
+                if not value:
+                    raise ValueError("工作表不能为空。")
+                if is_source:
+                    rule.source_sheet = value
+                else:
+                    rule.target_sheet = value
+            else:
+                old_same_position = rule.target_cells == rule.source_cells
+                if is_source:
+                    rule.source_cells = parse_cell_addresses(value)
+                    if old_same_position:
+                        rule.target_cells = list(rule.source_cells)
+                else:
+                    rule.target_cells = (
+                        list(rule.source_cells)
+                        if value in ("同位置", "与读取单元格相同")
+                        else parse_cell_addresses(value)
+                    )
+                rule.mode = infer_mapping_mode(
+                    rule.source_cells,
+                    rule.target_cells,
+                )
+        except (ValueError, IndexError) as exc:
+            messagebox.showerror(
+                "无法保存修改",
+                str(exc),
+                parent=self.root,
+            )
+            self._refresh_scheme_tree()
+            return "break"
+
+        self._refresh_scheme_tree()
+        self.scheme_tree.selection_set(iid)
+        self.scheme_tree.focus(iid)
+        self.scheme_tree.see(iid)
+        self.scheme_status.set(
+            f"第 {index + 1} 组已修改；可直接执行或导出方案。"
+        )
+        if move:
+            next_iid, next_column = self._next_scheme_edit_cell(
+                iid,
+                column,
+                move,
+            )
+            self.root.after(
+                10,
+                lambda: self._open_scheme_editor(next_iid, next_column),
+            )
+        return "break"
+
+    def _next_scheme_edit_cell(
+        self,
+        iid: str,
+        column: str,
+        direction: str,
+    ) -> tuple[str, str]:
+        editable_columns = ("#3", "#4", "#5")
+        rows = list(self.scheme_tree.get_children())
+        row_index = rows.index(iid)
+        column_index = editable_columns.index(column)
+        delta = -1 if direction == "previous" else 1
+        flat_index = row_index * len(editable_columns) + column_index + delta
+        flat_index %= max(len(rows) * len(editable_columns), 1)
+        return (
+            rows[flat_index // len(editable_columns)],
+            editable_columns[flat_index % len(editable_columns)],
+        )
+
     def _refresh_scheme_tree(self) -> None:
         if not hasattr(self, "scheme_tree"):
             return
+        self._cancel_scheme_editor()
         self.scheme_tree.delete(*self.scheme_tree.get_children())
         base = self._default_scheme_base_folder()
-        for group, rule in enumerate(self.scheme_rules, start=1):
+        for index, rule in enumerate(self.scheme_rules):
+            group = index + 1
             source_file = format_project_path(Path(rule.source_file), base)
             target_file = format_project_path(Path(rule.target_file), base)
             self.scheme_tree.insert(
                 "",
                 END,
+                iid=f"scheme:{index}:source",
                 values=(
                     group,
                     "来源",
@@ -2468,6 +2791,7 @@ class MapperApp:
             self.scheme_tree.insert(
                 "",
                 END,
+                iid=f"scheme:{index}:target",
                 values=(
                     group,
                     "目标",
