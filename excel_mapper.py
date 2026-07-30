@@ -55,13 +55,14 @@ PROJECT_FIELD_RE = re.compile(r"\s*[；;]\s*")
 TXT_EXAMPLE = """【来源工作簿.xlsx；来源工作表名称；A1,A2,A3 → 目标工作簿.xlsx；目标工作表名称；A1,A2,A3】
 【测试数据.xlsx；汇总；A1,B3,D5 → 目标.xlsx；Sheet1；同位置】
 【测试数据.xlsx；数据；B3-B6 → 目标.xlsx；Sheet2；A1-D1】
+【来源.xlsx；数据；A1-B3 → 目标.xlsx；模板；D1-E3】
 【C:\\业务资料\\来源.xlsx；统计表；C3-C8 → D:\\报表模板\\目标.xlsx；汇总；E3-E8】
 """
 
 TXT_INSTRUCTIONS = """说明：
 1. 每行填写一条映射，每一侧依次填写：工作簿；工作表；单元格。
 2. 字段可使用中文分号“；”或英文分号“;”。
-3. B3-B6、A1-D1 表示连续范围。
+3. B3-B6、A1-D1 表示连续范围；A1-B3 表示左上角到右下角的矩形区域。
 4. “同位置”表示写入地址与读取地址相同。
 5. 只写文件名时，工作簿应位于“方案基准文件夹”中。
 6. 外层括号支持：【】、[]、{}、()、（）和〔〕。
@@ -496,12 +497,12 @@ def serialize_mapping_project(
         target_cells = (
             "同位置"
             if rule.source_cells == rule.target_cells
-            else ",".join(rule.target_cells)
+            else format_cell_addresses(rule.target_cells)
         )
         lines.append(
             (
                 f"【{source_file}；{rule.source_sheet}；"
-                f"{','.join(rule.source_cells)} → "
+                f"{format_cell_addresses(rule.source_cells)} → "
                 f"{target_file}；{rule.target_sheet}；{target_cells}】"
             )
         )
@@ -614,6 +615,33 @@ def column_number_to_letters(number: int) -> str:
 def cell_sort_key(address: str) -> tuple[int, int]:
     row, column = split_address(address)
     return row, column
+
+
+def cell_column_sort_key(address: str) -> tuple[int, int]:
+    row, column = split_address(address)
+    return column, row
+
+
+def format_cell_addresses(addresses: list[str]) -> str:
+    if not addresses:
+        return ""
+    positions = [split_address(address) for address in addresses]
+    rows = [row for row, _column in positions]
+    columns = [column for _row, column in positions]
+    first_row, last_row = min(rows), max(rows)
+    first_column, last_column = min(columns), max(columns)
+    expected = [
+        (row, column)
+        for column in range(first_column, last_column + 1)
+        for row in range(first_row, last_row + 1)
+    ]
+    if positions == expected:
+        start = (
+            f"{column_number_to_letters(first_column + 1)}{first_row + 1}"
+        )
+        end = f"{column_number_to_letters(last_column + 1)}{last_row + 1}"
+        return start if start == end else f"{start}-{end}"
+    return ",".join(addresses)
 
 
 def normalized_match_name(name: str) -> str:
@@ -952,13 +980,16 @@ class CellPickerDialog:
         self._update_selected_text()
 
     def _update_selected_text(self) -> None:
-        ordered = sorted(self.selected, key=cell_sort_key)
+        ordered = sorted(self.selected, key=cell_column_sort_key)
         if not ordered:
             text = "尚未选择"
-        elif len(ordered) <= 12:
-            text = "、".join(ordered)
+        elif len(ordered) <= 50:
+            text = format_cell_addresses(ordered)
         else:
-            text = "、".join(ordered[:12]) + f"……（共 {len(ordered)} 个）"
+            text = (
+                format_cell_addresses(ordered[:12])
+                + f"……（共 {len(ordered)} 个）"
+            )
         self.selected_text.set(text)
 
     def _confirm(self) -> None:
@@ -969,7 +1000,7 @@ class CellPickerDialog:
                 parent=self.window,
             )
             return
-        self.result = sorted(self.selected, key=cell_sort_key)
+        self.result = sorted(self.selected, key=cell_column_sort_key)
         self.reader.close()
         self.window.destroy()
 
@@ -1005,7 +1036,7 @@ class MappingDialog:
             value=base.source_sheet if base else ""
         )
         self.source_cells = StringVar(
-            value=", ".join(initial.source_cells) if initial else ""
+            value=format_cell_addresses(initial.source_cells) if initial else ""
         )
         self.target_file = StringVar(
             value=base.target_file if base else str(target_files[0])
@@ -1014,7 +1045,7 @@ class MappingDialog:
             value=base.target_sheet if base else ""
         )
         self.target_cells = StringVar(
-            value=", ".join(initial.target_cells) if initial else ""
+            value=format_cell_addresses(initial.target_cells) if initial else ""
         )
         self._sync_target_cells = initial is None
         self._updating_target_cells = False
@@ -1965,11 +1996,11 @@ class MapperApp:
         for rule in self.rules:
             source = (
                 f"{Path(rule.source_file).name} / {rule.source_sheet} / "
-                f"{', '.join(rule.source_cells)}"
+                f"{format_cell_addresses(rule.source_cells)}"
             )
             target = (
                 f"{Path(rule.target_file).name} / {rule.target_sheet} / "
-                f"{', '.join(rule.target_cells)}"
+                f"{format_cell_addresses(rule.target_cells)}"
             )
             self.mapping_tree.insert(
                 "",
