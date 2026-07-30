@@ -210,6 +210,42 @@ class ExcelMapperTests(unittest.TestCase):
                 "【来源.xlsx；数据；A2 → 目标.xlsx；模板；B5】\n",
             )
 
+    def test_project_text_can_be_serialized_and_parsed_in_memory(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            source = folder / "来源.xlsx"
+            target = folder / "目标.xlsx"
+            rule = excel_mapper.MappingRule(
+                str(source),
+                "数据",
+                ["B3", "B4", "B5", "B6"],
+                str(target),
+                "模板",
+                ["A1", "B1", "C1", "D1"],
+                excel_mapper.MODE_SEQUENCE,
+            )
+
+            text = excel_mapper.serialize_mapping_project([rule], folder)
+            sources, targets, rules = excel_mapper.parse_mapping_project_text(
+                text,
+                folder,
+            )
+
+            self.assertEqual(sources, [source.resolve()])
+            self.assertEqual(targets, [target.resolve()])
+            self.assertEqual(rules[0].source_cells, ["B3", "B4", "B5", "B6"])
+            self.assertEqual(rules[0].target_cells, ["A1", "B1", "C1", "D1"])
+
+    def test_txt_example_starts_with_field_explanation(self) -> None:
+        self.assertTrue(
+            excel_mapper.TXT_EXAMPLE.startswith(
+                "【来源工作簿.xlsx；来源工作表名称；A1,A2,A3 → "
+                "目标工作簿.xlsx；目标工作表名称；A1,A2,A3】"
+            )
+        )
+        self.assertNotIn("每行填写一条映射", excel_mapper.TXT_EXAMPLE)
+        self.assertIn("每行填写一条映射", excel_mapper.TXT_INSTRUCTIONS)
+
     def test_txt_project_can_be_written_by_hand(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)
