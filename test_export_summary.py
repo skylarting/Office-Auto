@@ -44,7 +44,11 @@ class ExportSummaryTests(unittest.TestCase):
         )
         self.assertEqual(
             export_summary.parse_cell_addresses("B2-A1"),
-            ["A1", "B1", "A2", "B2"],
+            ["A1", "A2", "B1", "B2"],
+        )
+        self.assertEqual(
+            export_summary.parse_cell_addresses("A1-B3"),
+            ["A1", "A2", "A3", "B1", "B2", "B3"],
         )
         with self.assertRaises(ValueError):
             export_summary.parse_cell_addresses("I0, BAD")
