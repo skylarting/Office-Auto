@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import json
 from pathlib import Path
 import shutil
 from tkinter import (
@@ -39,7 +38,9 @@ from export_summary import (
 MODE_SEQUENCE = "按顺序一一对应"
 MODE_ONE_TO_MANY = "一个来源写入多个目标"
 MODE_MANUAL = "逐条手动设置"
-MAPPING_MODES = (MODE_SEQUENCE, MODE_ONE_TO_MANY, MODE_MANUAL)
+TXT_HEADER = (
+    "来源文件|来源工作表|来源单元格|目标文件|目标工作表|目标单元格"
+)
 
 
 @dataclass
@@ -133,6 +134,22 @@ def expand_rule(rule: MappingRule) -> list[ExpandedMapping]:
         )
         for source, target in pairs
     ]
+
+
+def infer_mapping_mode(
+    source_cells: list[str],
+    target_cells: list[str],
+) -> str:
+    if not source_cells or not target_cells:
+        raise ValueError("来源单元格和目标单元格都不能为空。")
+    if len(source_cells) == len(target_cells):
+        return MODE_MANUAL if len(source_cells) == 1 else MODE_SEQUENCE
+    if len(source_cells) == 1:
+        return MODE_ONE_TO_MANY
+    raise ValueError(
+        "无法自动判断映射关系：多个来源单元格只能对应相同数量的目标单元格；"
+        "一个来源单元格可以对应多个目标单元格。"
+    )
 
 
 def expand_rules(rules: list[MappingRule]) -> list[ExpandedMapping]:
@@ -370,33 +387,85 @@ def save_mapping_project(
     rules: list[MappingRule],
     output_folder: Path | None,
 ) -> None:
-    payload = {
-        "version": 1,
-        "source_files": [str(item) for item in source_files],
-        "target_files": [str(item) for item in target_files],
-        "rules": [asdict(rule) for rule in rules],
-        "output_folder": str(output_folder) if output_folder else "",
-    }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    lines = [
+        "# Excel 单元格映射方案",
+        "# 每行一条映射；多个单元格使用英文逗号分隔。",
+        "# 数量相同时按顺序对应；一个来源可写入多个目标。",
+        f"输出文件夹={output_folder or ''}",
+        TXT_HEADER,
+    ]
+    for rule in rules:
+        lines.append(
+            "|".join(
+                [
+                    rule.source_file,
+                    rule.source_sheet,
+                    ",".join(rule.source_cells),
+                    rule.target_file,
+                    rule.target_sheet,
+                    ",".join(rule.target_cells),
+                ]
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
 
 
 def load_mapping_project(
     path: Path,
 ) -> tuple[list[Path], list[Path], list[MappingRule], Path | None]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("version") != 1:
-        raise ValueError("不支持的映射方案版本。")
-    return (
-        [Path(item) for item in payload.get("source_files", [])],
-        [Path(item) for item in payload.get("target_files", [])],
-        [MappingRule(**item) for item in payload.get("rules", [])],
-        Path(payload["output_folder"])
-        if payload.get("output_folder")
-        else None,
-    )
+    sources: list[Path] = []
+    targets: list[Path] = []
+    rules: list[MappingRule] = []
+    output_folder: Path | None = None
+    base_folder = path.parent
+
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8-sig").splitlines(),
+        start=1,
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line == TXT_HEADER:
+            continue
+        if line.startswith("输出文件夹="):
+            output_text = line.split("=", 1)[1].strip()
+            if output_text:
+                output_folder = resolve_project_path(output_text, base_folder)
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 6:
+            raise ValueError(
+                f"第 {line_number} 行格式错误：应包含 6 个由 | 分隔的字段。"
+            )
+        try:
+            source_path = resolve_project_path(fields[0], base_folder)
+            target_path = resolve_project_path(fields[3], base_folder)
+            source_cells = parse_cell_addresses(fields[2])
+            target_cells = parse_cell_addresses(fields[5])
+            mode = infer_mapping_mode(source_cells, target_cells)
+        except ValueError as exc:
+            raise ValueError(f"第 {line_number} 行：{exc}") from exc
+        rule = MappingRule(
+            source_file=str(source_path),
+            source_sheet=fields[1],
+            source_cells=source_cells,
+            target_file=str(target_path),
+            target_sheet=fields[4],
+            target_cells=target_cells,
+            mode=mode,
+        )
+        rules.append(rule)
+        if source_path not in sources:
+            sources.append(source_path)
+        if target_path not in targets:
+            targets.append(target_path)
+    if not rules:
+        raise ValueError("方案文件中没有映射关系。")
+    return sources, targets, rules, output_folder
+
+
+def resolve_project_path(text: str, base_folder: Path) -> Path:
+    path = Path(text)
+    return path if path.is_absolute() else (base_folder / path).resolve()
 
 
 class MappingDialog:
@@ -412,7 +481,7 @@ class MappingDialog:
         self.target_files = target_files
         self.window = Toplevel(parent)
         self.window.title("设置映射关系")
-        self.window.geometry("650x430")
+        self.window.geometry("650x350")
         self.window.resizable(False, False)
         self.window.transient(parent)
         self.window.grab_set()
@@ -435,11 +504,11 @@ class MappingDialog:
         self.target_cells = StringVar(
             value=", ".join(initial.target_cells) if initial else ""
         )
-        self.mode = StringVar(value=initial.mode if initial else MODE_SEQUENCE)
-
+        self._sync_target_cells = initial is None
+        self._updating_target_cells = False
         container = ttk.Frame(self.window, padding=16)
         container.pack(fill=BOTH, expand=True)
-        self.source_sheet_combo = self._location_group(
+        self.source_sheet_combo, self.source_cells_entry = self._location_group(
             container,
             "读取位置",
             self.source_file,
@@ -448,7 +517,7 @@ class MappingDialog:
             source_files,
             0,
         )
-        self.target_sheet_combo = self._location_group(
+        self.target_sheet_combo, self.target_cells_entry = self._location_group(
             container,
             "写入位置",
             self.target_file,
@@ -458,14 +527,13 @@ class MappingDialog:
             1,
         )
 
-        mode_frame = ttk.LabelFrame(container, text="映射方式", padding=10)
-        mode_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        ttk.Combobox(
-            mode_frame,
-            textvariable=self.mode,
-            values=MAPPING_MODES,
-            state="readonly",
-        ).pack(fill=X)
+        ttk.Label(
+            container,
+            text=(
+                "程序会自动判断：两边数量相同则按填写顺序对应；"
+                "一个来源可写入多个目标。新增时写入单元格默认跟随读取单元格。"
+            ),
+        ).grid(row=2, column=0, columnspan=2, sticky=W, pady=(12, 0))
 
         actions = ttk.Frame(container)
         actions.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
@@ -480,6 +548,8 @@ class MappingDialog:
 
         self._refresh_source_sheets()
         self._refresh_target_sheets()
+        self.source_cells.trace_add("write", self._copy_source_cells_to_target)
+        self.target_cells.trace_add("write", self._target_cells_changed)
         parent.wait_window(self.window)
 
     def _location_group(
@@ -515,7 +585,8 @@ class MappingDialog:
         )
         sheet_combo.pack(fill=X, pady=(2, 8))
         ttk.Label(frame, text="单元格（逗号分隔）：").pack(anchor=W)
-        ttk.Entry(frame, textvariable=cells_var).pack(fill=X, pady=(2, 0))
+        cells_entry = ttk.Entry(frame, textvariable=cells_var)
+        cells_entry.pack(fill=X, pady=(2, 0))
         if column == 0:
             file_combo.bind(
                 "<<ComboboxSelected>>",
@@ -526,7 +597,20 @@ class MappingDialog:
                 "<<ComboboxSelected>>",
                 lambda _event: self._refresh_target_sheets(),
             )
-        return sheet_combo
+        return sheet_combo, cells_entry
+
+    def _copy_source_cells_to_target(self, *_args) -> None:
+        if not self._sync_target_cells:
+            return
+        self._updating_target_cells = True
+        try:
+            self.target_cells.set(self.source_cells.get())
+        finally:
+            self._updating_target_cells = False
+
+    def _target_cells_changed(self, *_args) -> None:
+        if not self._updating_target_cells:
+            self._sync_target_cells = False
 
     def _refresh_source_sheets(self) -> None:
         self._refresh_sheets(
@@ -554,14 +638,16 @@ class MappingDialog:
 
     def _save(self) -> None:
         try:
+            source_cells = parse_cell_addresses(self.source_cells.get())
+            target_cells = parse_cell_addresses(self.target_cells.get())
             rule = MappingRule(
                 source_file=self.source_file.get(),
                 source_sheet=self.source_sheet.get(),
-                source_cells=parse_cell_addresses(self.source_cells.get()),
+                source_cells=source_cells,
                 target_file=self.target_file.get(),
                 target_sheet=self.target_sheet.get(),
-                target_cells=parse_cell_addresses(self.target_cells.get()),
-                mode=self.mode.get(),
+                target_cells=target_cells,
+                mode=infer_mapping_mode(source_cells, target_cells),
             )
             expand_rule(rule)
             self.result = rule
@@ -574,8 +660,8 @@ class MapperApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
         self.root.title("Excel 单元格映射工具")
-        self.root.geometry("1100x760")
-        self.root.minsize(900, 650)
+        self.root.geometry("1100x720")
+        self.root.minsize(900, 600)
         self.source_files: list[Path] = []
         self.target_files: list[Path] = []
         self.rules: list[MappingRule] = []
@@ -588,7 +674,12 @@ class MapperApp:
         container = ttk.Frame(self.root, padding=16)
         container.pack(fill=BOTH, expand=True)
 
-        file_row = ttk.Frame(container)
+        fixed_bottom = ttk.Frame(container)
+        fixed_bottom.pack(side="bottom", fill=X)
+        content = ttk.Frame(container)
+        content.pack(fill=BOTH, expand=True)
+
+        file_row = ttk.Frame(content)
         file_row.pack(fill=X)
         file_row.columnconfigure(0, weight=1, uniform="files")
         file_row.columnconfigure(1, weight=1, uniform="files")
@@ -610,24 +701,26 @@ class MapperApp:
         )
 
         mapping_frame = ttk.LabelFrame(
-            container,
+            content,
             text="3. 映射关系",
             padding=10,
         )
         mapping_frame.pack(fill=BOTH, expand=True, pady=(10, 0))
         self.mapping_tree = ttk.Treeview(
             mapping_frame,
-            columns=("source", "target", "mode"),
+            columns=("source", "target"),
             show="headings",
             height=10,
         )
         self.mapping_tree.heading("source", text="来源位置")
         self.mapping_tree.heading("target", text="目标位置")
-        self.mapping_tree.heading("mode", text="映射方式")
-        self.mapping_tree.column("source", width=370)
-        self.mapping_tree.column("target", width=370)
-        self.mapping_tree.column("mode", width=150)
+        self.mapping_tree.column("source", width=450)
+        self.mapping_tree.column("target", width=450)
         self.mapping_tree.pack(fill=BOTH, expand=True)
+        self.mapping_tree.bind(
+            "<Double-1>",
+            lambda _event: self._edit_rule(),
+        )
         mapping_actions = ttk.Frame(mapping_frame)
         mapping_actions.pack(fill=X, pady=(8, 0))
         for text, command in (
@@ -645,7 +738,7 @@ class MapperApp:
             ).pack(side=LEFT, padx=(0, 6))
 
         output_frame = ttk.LabelFrame(
-            container,
+            fixed_bottom,
             text="4. 输出与执行",
             padding=10,
         )
@@ -676,11 +769,11 @@ class MapperApp:
             pady=(5, 0),
         )
 
-        actions = ttk.Frame(container)
+        actions = ttk.Frame(fixed_bottom)
         actions.pack(fill=X, pady=(10, 0))
         for text, command in (
-            ("保存方案", self._save_project),
-            ("载入方案", self._load_project),
+            ("保存 TXT 方案", self._save_project),
+            ("载入 TXT 方案", self._load_project),
             ("预检查", self._precheck),
             ("开始映射", self._run),
             ("退出", self.root.destroy),
@@ -710,7 +803,7 @@ class MapperApp:
             frame,
             columns=("path",),
             show="headings",
-            height=5,
+            height=4,
         )
         tree.heading("path", text="文件路径")
         tree.column("path", width=430)
@@ -871,7 +964,7 @@ class MapperApp:
             self.mapping_tree.insert(
                 "",
                 END,
-                values=(source, target, rule.mode),
+                values=(source, target),
             )
 
     def _preview_expanded(self) -> None:
@@ -931,9 +1024,9 @@ class MapperApp:
 
     def _save_project(self) -> None:
         selected = filedialog.asksaveasfilename(
-            title="保存映射方案",
-            defaultextension=".json",
-            filetypes=[("映射方案", "*.json")],
+            title="保存 TXT 映射方案",
+            defaultextension=".txt",
+            filetypes=[("TXT 映射方案", "*.txt"), ("所有文件", "*.*")],
         )
         if selected:
             save_mapping_project(
@@ -948,8 +1041,8 @@ class MapperApp:
 
     def _load_project(self) -> None:
         selected = filedialog.askopenfilename(
-            title="载入映射方案",
-            filetypes=[("映射方案", "*.json")],
+            title="载入 TXT 映射方案",
+            filetypes=[("TXT 映射方案", "*.txt"), ("所有文件", "*.*")],
         )
         if not selected:
             return
@@ -1060,4 +1153,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
