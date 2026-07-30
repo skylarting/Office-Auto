@@ -15,6 +15,7 @@ from tkinter import (
     X,
     Canvas,
     StringVar,
+    Text,
     Tk,
     Toplevel,
     filedialog,
@@ -834,7 +835,7 @@ class MappingDialog:
         self.target_files = target_files
         self.window = Toplevel(parent)
         self.window.title("设置映射关系")
-        self.window.geometry("760x370")
+        self.window.geometry("760x440")
         self.window.resizable(False, False)
         self.window.transient(parent)
         self.window.grab_set()
@@ -887,9 +888,11 @@ class MappingDialog:
         ttk.Label(
             container,
             text=(
-                "通常只需选择左侧的读取单元格，右侧会自动填入相同位置；"
-                "如需写入其他位置，再修改右侧即可。"
+                "操作提示：先在左侧选择需要读取的单元格，右侧会自动复制"
+                "相同的单元格地址。只有写入地址不同时，才需要修改右侧。"
             ),
+            wraplength=720,
+            justify=LEFT,
         ).grid(row=2, column=0, columnspan=2, sticky=W, pady=(12, 0))
 
         actions = ttk.Frame(container)
@@ -944,19 +947,34 @@ class MappingDialog:
             state="readonly",
         )
         sheet_combo.pack(fill=X, pady=(2, 8))
+        cells_title = ttk.Frame(frame)
+        cells_title.pack(fill=X)
         ttk.Label(
-            frame,
+            cells_title,
             text="读取单元格：" if is_source else "写入单元格：",
-        ).pack(anchor=W)
-        cells_row = ttk.Frame(frame)
-        cells_row.pack(fill=X, pady=(2, 0))
-        cells_entry = ttk.Entry(cells_row, textvariable=cells_var)
-        cells_entry.pack(side=LEFT, fill=X, expand=True)
+        ).pack(side=LEFT)
         ttk.Button(
-            cells_row,
-            text="选择…",
+            cells_title,
+            text="选择单元格…",
             command=lambda: self._pick_cells(is_source),
         ).pack(side=LEFT, padx=(6, 0))
+        cells_row = ttk.Frame(frame)
+        cells_row.pack(fill=X, pady=(2, 0))
+        cells_entry = Text(
+            cells_row,
+            height=3,
+            wrap="word",
+            font=("TkDefaultFont", 10),
+        )
+        cells_entry.pack(side=LEFT, fill=BOTH, expand=True)
+        cells_scroll = ttk.Scrollbar(
+            cells_row,
+            orient="vertical",
+            command=cells_entry.yview,
+        )
+        cells_scroll.pack(side=LEFT, fill="y")
+        cells_entry.configure(yscrollcommand=cells_scroll.set)
+        self._bind_text_to_variable(cells_entry, cells_var)
         if column == 0:
             file_combo.bind(
                 "<<ComboboxSelected>>",
@@ -976,6 +994,38 @@ class MappingDialog:
                 lambda _event: self._target_sheet_selected(),
             )
         return sheet_combo, cells_entry
+
+    @staticmethod
+    def _bind_text_to_variable(text_widget: Text, variable: StringVar) -> None:
+        changing = {"value": False}
+
+        def variable_changed(*_args) -> None:
+            if changing["value"]:
+                return
+            value = variable.get()
+            current = text_widget.get("1.0", "end-1c")
+            if current == value:
+                return
+            changing["value"] = True
+            try:
+                text_widget.delete("1.0", END)
+                text_widget.insert("1.0", value)
+            finally:
+                changing["value"] = False
+
+        def text_changed(_event=None) -> None:
+            if changing["value"]:
+                return
+            changing["value"] = True
+            try:
+                variable.set(text_widget.get("1.0", "end-1c"))
+            finally:
+                changing["value"] = False
+
+        variable_changed()
+        variable.trace_add("write", variable_changed)
+        text_widget.bind("<KeyRelease>", text_changed)
+        text_widget.bind("<FocusOut>", text_changed)
 
     def _pick_cells(self, is_source: bool) -> None:
         file_var = self.source_file if is_source else self.target_file
