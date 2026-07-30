@@ -50,7 +50,20 @@ PROJECT_BRACKETS = {
     "〔": "〕",
 }
 PROJECT_DIRECTION_RE = re.compile(r"\s*(?:→|->|=>|>>|》)\s*")
-PROJECT_FIELD_RE = re.compile(r"\s*(?:｜|\||//)\s*")
+PROJECT_FIELD_RE = re.compile(r"\s*[；;]\s*")
+TXT_EXAMPLE = """每行填写一条映射：
+
+【测试数据.xlsx；汇总；A1,B3,D5 → 目标.xlsx；Sheet1；同位置】
+【测试数据.xlsx；数据；B3-B6 → 目标.xlsx；Sheet2；A1-D1】
+
+说明：
+1. 每一侧依次填写：工作簿；工作表；单元格。
+2. 多个单元格可用逗号分隔。
+3. B3-B6、A1-D1 表示连续范围。
+4. “同位置”表示写入地址与读取地址相同。
+5. 只写文件名时，工作簿应与 TXT 方案放在同一文件夹。
+6. 输出默认保存在 TXT 所在文件夹的“映射结果”文件夹。
+"""
 
 
 @dataclass
@@ -405,9 +418,9 @@ def save_mapping_project(
         )
         lines.append(
             (
-                f"【{source_file}｜{rule.source_sheet}｜"
+                f"【{source_file}；{rule.source_sheet}；"
                 f"{','.join(rule.source_cells)} → "
-                f"{target_file}｜{rule.target_sheet}｜{target_cells}】"
+                f"{target_file}；{rule.target_sheet}；{target_cells}】"
             )
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
@@ -435,12 +448,12 @@ def load_mapping_project(
             raise ValueError(
                 f"第 {line_number} 行缺少读取和写入之间的箭头 →。"
             )
-        source_fields = PROJECT_FIELD_RE.split(direction_parts[0])
-        target_fields = PROJECT_FIELD_RE.split(direction_parts[1])
+        source_fields = PROJECT_FIELD_RE.split(direction_parts[0], maxsplit=2)
+        target_fields = PROJECT_FIELD_RE.split(direction_parts[1], maxsplit=2)
         if len(source_fields) != 3 or len(target_fields) != 3:
             raise ValueError(
                 f"第 {line_number} 行格式错误。正确格式为："
-                "【工作簿｜工作表｜单元格 → 工作簿｜工作表｜单元格】"
+                "【工作簿；工作表；单元格 → 工作簿；工作表；单元格】"
             )
         try:
             source_path = resolve_project_path(source_fields[0], base_folder)
@@ -835,7 +848,7 @@ class MappingDialog:
         self.target_files = target_files
         self.window = Toplevel(parent)
         self.window.title("设置映射关系")
-        self.window.geometry("760x440")
+        self.window.geometry("760x410")
         self.window.resizable(False, False)
         self.window.transient(parent)
         self.window.grab_set()
@@ -885,18 +898,8 @@ class MappingDialog:
             False,
         )
 
-        ttk.Label(
-            container,
-            text=(
-                "操作提示：先在左侧选择需要读取的单元格，右侧会自动复制"
-                "相同的单元格地址。只有写入地址不同时，才需要修改右侧。"
-            ),
-            wraplength=720,
-            justify=LEFT,
-        ).grid(row=2, column=0, columnspan=2, sticky=W, pady=(12, 0))
-
         actions = ttk.Frame(container)
-        actions.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         ttk.Button(actions, text="保存映射", command=self._save).pack(side=LEFT)
         ttk.Button(
             actions,
@@ -1223,6 +1226,18 @@ class MapperApp:
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
+        plan_actions = ttk.Frame(mapping_frame)
+        plan_actions.pack(fill=X, pady=(6, 0))
+        for text, command in (
+            ("预检查", self._precheck),
+            ("TXT 格式示例", self._show_txt_example),
+            ("保存 TXT 方案", self._save_project),
+            ("载入 TXT 方案", self._load_project),
+        ):
+            ttk.Button(plan_actions, text=text, command=command).pack(
+                side=LEFT,
+                padx=(0, 6),
+            )
 
         output_frame = ttk.LabelFrame(
             fixed_bottom,
@@ -1259,9 +1274,6 @@ class MapperApp:
         actions = ttk.Frame(fixed_bottom)
         actions.pack(fill=X, pady=(10, 0))
         for text, command in (
-            ("保存 TXT 方案", self._save_project),
-            ("载入 TXT 方案", self._load_project),
-            ("预检查", self._precheck),
             ("开始映射", self._run),
             ("退出", self.root.destroy),
         ):
@@ -1575,6 +1587,37 @@ class MapperApp:
         selected = filedialog.askdirectory(title="选择副本输出文件夹")
         if selected:
             self.output_folder.set(selected)
+
+    def _show_txt_example(self) -> None:
+        window = Toplevel(self.root)
+        window.title("TXT 映射方案格式示例")
+        window.geometry("780x390")
+        window.minsize(650, 330)
+        window.transient(self.root)
+        container = ttk.Frame(window, padding=12)
+        container.pack(fill=BOTH, expand=True)
+        example = Text(container, wrap="word", font=("TkFixedFont", 10))
+        example.insert("1.0", TXT_EXAMPLE)
+        example.configure(state="disabled")
+        example.pack(fill=BOTH, expand=True)
+        actions = ttk.Frame(container)
+        actions.pack(fill=X, pady=(8, 0))
+
+        def copy_example() -> None:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(TXT_EXAMPLE)
+            self.status.set("TXT 格式示例已复制到剪贴板。")
+
+        ttk.Button(
+            actions,
+            text="复制示例",
+            command=copy_example,
+        ).pack(side=LEFT)
+        ttk.Button(
+            actions,
+            text="关闭",
+            command=window.destroy,
+        ).pack(side=LEFT, padx=(8, 0))
 
     def _save_project(self) -> None:
         selected = filedialog.asksaveasfilename(
