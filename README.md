@@ -2,6 +2,11 @@
 
 Windows Excel 单元格批量汇总工具。
 
+仓库现在提供两个独立程序：
+
+- `ExcelSummary.exe`：从一个或多个工作簿提取指定单元格并生成汇总；
+- `ExcelMapper.exe`：把多个来源工作簿的指定单元格映射到多个目标工作簿。
+
 ## 功能
 
 - 选择一个 `.xls` / `.xlsx` / `.xlsm` 文件；
@@ -87,9 +92,28 @@ python export_summary.py "测试数据.xlsx" \
 python -m unittest -v
 ```
 
+## ExcelMapper
+
+`ExcelMapper.exe` 支持：
+
+- 添加多个来源工作簿和多个目标工作簿；
+- 自动读取工作簿中的工作表名称；
+- 添加、编辑、复制、删除映射规则；
+- `按顺序一一对应`：多个来源与相同数量的目标按顺序配对；
+- `一个来源写入多个目标`：把一个来源值写入多个位置；
+- `逐条手动设置`：每条规则明确设置一个来源和一个目标；
+- 将多单元格规则展开为逐项的“来源位置 → 目标位置”预览；
+- 保存和载入 JSON 映射方案；
+- 执行前检查文件、工作表、单元格、重复目标和已有内容；
+- 为目标工作簿生成新副本，原文件始终不修改；
+- 支持 `.xls`、`.xlsx`、`.xlsm`，旧版 `.xls` 副本输出为 `.xlsx`。
+
+工作簿副本会保留目标表原来的布局和单元格样式，只写入映射值，并使用来源
+单元格的数字显示格式。
+
 ## 构建 Windows EXE
 
 推送到 GitHub 后，`Build Windows EXE` 工作流会在 Windows 环境中运行测试并
-生成 `ExcelSummary.exe`。在 Actions 运行页面底部下载
-`ExcelSummary-Windows` 构建产物即可。
+生成 `ExcelSummary.exe` 和 `ExcelMapper.exe`。在 Actions 运行页面底部
+分别下载 `ExcelSummary-Windows` 和 `ExcelMapper-Windows` 构建产物。
 
