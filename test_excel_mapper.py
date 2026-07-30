@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
 import xlwt
 
 import excel_mapper
@@ -39,6 +40,39 @@ class ExcelMapperTests(unittest.TestCase):
                 [path.name for path in excel_mapper.workbook_files_in_folder(folder)],
                 ["乙.xls", "甲.xlsx"],
             )
+
+    def test_workbook_reader_exposes_cell_fill_colors(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            xlsx_path = folder / "颜色.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "数据"
+            sheet["A1"] = "表头"
+            sheet["A1"].fill = PatternFill(
+                fill_type="solid",
+                fgColor="FF336699",
+            )
+            workbook.save(xlsx_path)
+            workbook.close()
+
+            reader = excel_mapper.WorkbookReader(xlsx_path)
+            self.assertEqual(reader.fill_color("数据", "A1"), "#336699")
+            self.assertIsNone(reader.fill_color("数据", "B1"))
+            reader.close()
+
+            xls_path = folder / "颜色.xls"
+            legacy = xlwt.Workbook()
+            legacy_sheet = legacy.add_sheet("数据")
+            style = xlwt.easyxf(
+                "pattern: pattern solid, fore_colour yellow;"
+            )
+            legacy_sheet.write(0, 0, "表头", style)
+            legacy.save(str(xls_path))
+
+            legacy_reader = excel_mapper.WorkbookReader(xls_path)
+            self.assertIsNotNone(legacy_reader.fill_color("数据", "A1"))
+            legacy_reader.close()
 
     def test_expand_sequence_and_one_to_many(self) -> None:
         sequence = excel_mapper.MappingRule(
