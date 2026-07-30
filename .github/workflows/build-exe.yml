@@ -5,7 +5,9 @@ on:
   push:
     paths:
       - "export_summary.py"
+      - "excel_mapper.py"
       - "test_export_summary.py"
+      - "test_excel_mapper.py"
       - ".github/workflows/build-exe.yml"
 
 jobs:
@@ -37,10 +39,27 @@ jobs:
           --name ExcelSummary
           export_summary.py
 
-      - name: Upload EXE
+      - name: Build ExcelMapper EXE
+        run: >
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --name ExcelMapper
+          excel_mapper.py
+
+      - name: Upload ExcelSummary EXE
         uses: actions/upload-artifact@v4
         with:
           name: ExcelSummary-Windows
           path: dist/ExcelSummary.exe
+          if-no-files-found: error
+
+      - name: Upload ExcelMapper EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExcelMapper-Windows
+          path: dist/ExcelMapper.exe
           if-no-files-found: error
 
