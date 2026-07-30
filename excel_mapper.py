@@ -2012,7 +2012,8 @@ class MapperApp:
             scheme_actions,
             text=(
                 "直接填写底部空白组即可新增　　"
-                "单击：选择　　双击：输入　　"
+                "单击：选择　　双击工作簿：浏览　　"
+                "双击其他格：输入　　"
                 "Delete/右键：整组操作"
             ),
             style="Muted.TLabel",
@@ -2706,8 +2707,69 @@ class MapperApp:
         if iid and column in ("#3", "#4", "#5"):
             self.scheme_tree.selection_set(iid)
             self.scheme_tree.focus(iid)
-            self._open_scheme_editor(iid, column, open_dropdown=False)
+            if column == "#3":
+                self._browse_scheme_workbook(iid)
+            else:
+                self._open_scheme_editor(iid, column, open_dropdown=False)
         return "break"
+
+    def _browse_scheme_workbook(self, iid: str) -> None:
+        iid = self._materialize_blank_scheme_row(iid)
+        try:
+            _, index_text, kind = iid.split(":")
+            index = int(index_text)
+            rule = self.scheme_rules[index]
+            is_source = kind == "source"
+            current_path = Path(
+                rule.source_file if is_source else rule.target_file
+            )
+            base = self._default_scheme_base_folder()
+            initial_dir = (
+                current_path.parent
+                if current_path.parent.exists()
+                else (base or Path.cwd())
+            )
+            selected = filedialog.askopenfilename(
+                title="选择 Excel 工作簿",
+                initialdir=str(initial_dir),
+                filetypes=[
+                    ("Excel 工作簿", "*.xls *.xlsx *.xlsm"),
+                    ("所有文件", "*.*"),
+                ],
+            )
+            if not selected:
+                return
+            path = Path(selected).resolve()
+            if is_source:
+                rule.source_file = str(path)
+            else:
+                rule.target_file = str(path)
+            names = workbook_sheet_names(path)
+            current_sheet = (
+                rule.source_sheet if is_source else rule.target_sheet
+            )
+            if current_sheet not in names and names:
+                counterpart = (
+                    rule.target_sheet if is_source else rule.source_sheet
+                )
+                selected_sheet = best_name_match(counterpart, names) or names[0]
+                if is_source:
+                    rule.source_sheet = selected_sheet
+                else:
+                    rule.target_sheet = selected_sheet
+            self._refresh_scheme_tree()
+            self.scheme_tree.selection_set(iid)
+            self.scheme_tree.focus(iid)
+            self.scheme_tree.see(iid)
+            self.scheme_status.set(
+                f"第 {index + 1} 组工作簿已更新。"
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "无法选择工作簿",
+                str(exc),
+                parent=self.root,
+            )
 
     def _scheme_editor_values(
         self,
