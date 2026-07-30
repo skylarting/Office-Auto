@@ -55,14 +55,17 @@ TXT_EXAMPLE = """每行填写一条映射：
 
 【测试数据.xlsx；汇总；A1,B3,D5 → 目标.xlsx；Sheet1；同位置】
 【测试数据.xlsx；数据；B3-B6 → 目标.xlsx；Sheet2；A1-D1】
+【C:\\业务资料\\来源.xlsx；统计表；C3-C8 → D:\\报表模板\\目标.xlsx；汇总；E3-E8】
 
 说明：
 1. 每一侧依次填写：工作簿；工作表；单元格。
-2. 多个单元格可用逗号分隔。
+2. 字段可使用中文分号“；”或英文分号“;”。
 3. B3-B6、A1-D1 表示连续范围。
 4. “同位置”表示写入地址与读取地址相同。
 5. 只写文件名时，工作簿应与 TXT 方案放在同一文件夹。
-6. 输出默认保存在 TXT 所在文件夹的“映射结果”文件夹。
+6. 外层括号支持：【】、[]、{}、()、（）和〔〕。
+7. 方向箭头支持：→、->、=>、>> 和 》。
+8. 输出默认保存在 TXT 所在文件夹的“映射结果”文件夹。
 """
 
 
@@ -525,6 +528,40 @@ def cell_sort_key(address: str) -> tuple[int, int]:
     return row, column
 
 
+def normalized_match_name(name: str) -> str:
+    text = Path(name).stem if Path(name).suffix else name
+    text = re.sub(
+        r"(?:\s*[-_（(]?\s*副本\s*[）)]?)$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"[\s_\-]+", "", text).casefold()
+
+
+def best_name_match(source_name: str, candidates: list[str]) -> str | None:
+    source = normalized_match_name(source_name)
+    best: str | None = None
+    best_score = 0
+    for candidate in candidates:
+        candidate_name = normalized_match_name(candidate)
+        if not source or not candidate_name:
+            continue
+        if source == candidate_name:
+            score = 10000 + len(source)
+        else:
+            common = 0
+            for left, right in zip(source, candidate_name):
+                if left != right:
+                    break
+                common += 1
+            score = 1000 + common if common >= 2 else 0
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best
+
+
 class CellPickerDialog:
     ROW_HEIGHT = 28
     COLUMN_WIDTH = 105
@@ -874,10 +911,15 @@ class MappingDialog:
         )
         self._sync_target_cells = initial is None
         self._updating_target_cells = False
+        self._target_file_manually_selected = initial is not None
         self._target_sheet_manually_selected = initial is not None
         container = ttk.Frame(self.window, padding=16)
         container.pack(fill=BOTH, expand=True)
-        self.source_sheet_combo, self.source_cells_entry = self._location_group(
+        (
+            self.source_file_combo,
+            self.source_sheet_combo,
+            self.source_cells_entry,
+        ) = self._location_group(
             container,
             "读取位置",
             self.source_file,
@@ -887,7 +929,11 @@ class MappingDialog:
             0,
             True,
         )
-        self.target_sheet_combo, self.target_cells_entry = self._location_group(
+        (
+            self.target_file_combo,
+            self.target_sheet_combo,
+            self.target_cells_entry,
+        ) = self._location_group(
             container,
             "写入位置",
             self.target_file,
@@ -910,6 +956,8 @@ class MappingDialog:
         container.columnconfigure(1, weight=1)
 
         self._refresh_source_sheets()
+        if initial is None:
+            self._match_target_file()
         self._refresh_target_sheets()
         if initial is None:
             self._match_target_sheet()
@@ -996,7 +1044,7 @@ class MappingDialog:
                 "<<ComboboxSelected>>",
                 lambda _event: self._target_sheet_selected(),
             )
-        return sheet_combo, cells_entry
+        return file_combo, sheet_combo, cells_entry
 
     @staticmethod
     def _bind_text_to_variable(text_widget: Text, variable: StringVar) -> None:
@@ -1057,6 +1105,10 @@ class MappingDialog:
 
     def _source_file_selected(self) -> None:
         self._refresh_source_sheets()
+        if not self._target_file_manually_selected:
+            self._match_target_file()
+            self._target_sheet_manually_selected = False
+            self._refresh_target_sheets()
         self._source_sheet_selected()
 
     def _source_sheet_selected(self) -> None:
@@ -1064,6 +1116,7 @@ class MappingDialog:
             self._match_target_sheet()
 
     def _target_file_selected(self) -> None:
+        self._target_file_manually_selected = True
         self._target_sheet_manually_selected = False
         self._refresh_target_sheets()
         self._match_target_sheet()
@@ -1071,11 +1124,23 @@ class MappingDialog:
     def _target_sheet_selected(self) -> None:
         self._target_sheet_manually_selected = True
 
+    def _match_target_file(self) -> None:
+        source_name = Path(self.source_file.get()).name
+        target_paths = list(self.target_file_combo.cget("values"))
+        target_names = [Path(item).name for item in target_paths]
+        matched_name = best_name_match(source_name, target_names)
+        if matched_name:
+            for path in target_paths:
+                if Path(path).name == matched_name:
+                    self.target_file.set(path)
+                    break
+
     def _match_target_sheet(self) -> None:
         source_name = self.source_sheet.get()
         target_names = list(self.target_sheet_combo.cget("values"))
-        if source_name and source_name in target_names:
-            self.target_sheet.set(source_name)
+        matched_name = best_name_match(source_name, target_names)
+        if matched_name:
+            self.target_sheet.set(matched_name)
 
     def _copy_source_cells_to_target(self, *_args) -> None:
         if not self._sync_target_cells:
@@ -1195,9 +1260,19 @@ class MapperApp:
             text="3. 映射关系",
             padding=10,
         )
-        mapping_frame.pack(fill=BOTH, expand=True, pady=(10, 0))
+        mapping_frame.pack(fill=X, pady=(10, 0))
+        self.mapping_notebook = ttk.Notebook(mapping_frame)
+        self.mapping_notebook.pack(fill=X)
+        manual_tab = ttk.Frame(self.mapping_notebook, padding=8)
+        txt_tab = ttk.Frame(self.mapping_notebook, padding=12)
+        self.mapping_notebook.add(manual_tab, text="手动设置")
+        self.mapping_notebook.add(txt_tab, text="TXT 方案")
+
+        mapping_table = ttk.Frame(manual_tab)
+        mapping_table.pack(fill=X)
+        mapping_table.columnconfigure(0, weight=1)
         self.mapping_tree = ttk.Treeview(
-            mapping_frame,
+            mapping_table,
             columns=("source", "target"),
             show="headings",
             height=10,
@@ -1206,12 +1281,28 @@ class MapperApp:
         self.mapping_tree.heading("target", text="目标位置")
         self.mapping_tree.column("source", width=450)
         self.mapping_tree.column("target", width=450)
-        self.mapping_tree.pack(fill=BOTH, expand=True)
+        self.mapping_tree.grid(row=0, column=0, sticky="nsew")
+        mapping_vertical = ttk.Scrollbar(
+            mapping_table,
+            orient="vertical",
+            command=self.mapping_tree.yview,
+        )
+        mapping_vertical.grid(row=0, column=1, sticky="ns")
+        mapping_horizontal = ttk.Scrollbar(
+            mapping_table,
+            orient="horizontal",
+            command=self.mapping_tree.xview,
+        )
+        mapping_horizontal.grid(row=1, column=0, sticky="ew")
+        self.mapping_tree.configure(
+            yscrollcommand=mapping_vertical.set,
+            xscrollcommand=mapping_horizontal.set,
+        )
         self.mapping_tree.bind(
             "<Double-1>",
             lambda _event: self._edit_rule(),
         )
-        mapping_actions = ttk.Frame(mapping_frame)
+        mapping_actions = ttk.Frame(manual_tab)
         mapping_actions.pack(fill=X, pady=(8, 0))
         for text, command in (
             ("添加映射", self._add_rule),
@@ -1220,19 +1311,26 @@ class MapperApp:
             ("删除选中", self._delete_rule),
             ("清空映射", self._clear_rules),
             ("展开预览", self._preview_expanded),
+            ("预检查", self._precheck),
         ):
             ttk.Button(
                 mapping_actions,
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
-        plan_actions = ttk.Frame(mapping_frame)
-        plan_actions.pack(fill=X, pady=(6, 0))
+        ttk.Label(
+            txt_tab,
+            text=(
+                "使用 TXT 方案可以批量维护映射。载入后会自动切回"
+                "“手动设置”页面，便于核对。"
+            ),
+        ).pack(anchor=W)
+        plan_actions = ttk.Frame(txt_tab)
+        plan_actions.pack(fill=X, pady=(12, 0))
         for text, command in (
-            ("预检查", self._precheck),
-            ("TXT 格式示例", self._show_txt_example),
-            ("保存 TXT 方案", self._save_project),
             ("载入 TXT 方案", self._load_project),
+            ("保存当前映射为 TXT", self._save_project),
+            ("查看 TXT 格式示例", self._show_txt_example),
         ):
             ttk.Button(plan_actions, text=text, command=command).pack(
                 side=LEFT,
@@ -1245,7 +1343,24 @@ class MapperApp:
             padding=10,
         )
         output_frame.pack(fill=X, pady=(10, 0))
-        location_row = ttk.Frame(output_frame)
+        output_content = ttk.Frame(output_frame)
+        output_content.pack(side=LEFT, fill=X, expand=True)
+        run_actions = ttk.Frame(output_frame)
+        run_actions.pack(side=RIGHT, padx=(14, 0))
+        ttk.Button(
+            run_actions,
+            text="开始映射",
+            command=self._run,
+            width=12,
+        ).pack(fill=X)
+        ttk.Button(
+            run_actions,
+            text="退出",
+            command=self.root.destroy,
+            width=12,
+        ).pack(fill=X, pady=(8, 0))
+
+        location_row = ttk.Frame(output_content)
         location_row.pack(fill=X)
         ttk.Label(location_row, text="副本输出文件夹：").pack(side=LEFT)
         ttk.Entry(
@@ -1258,7 +1373,7 @@ class MapperApp:
             command=self._browse_output,
         ).pack(side=LEFT, padx=(8, 0))
 
-        progress_row = ttk.Frame(output_frame)
+        progress_row = ttk.Frame(output_content)
         progress_row.pack(fill=X, pady=(8, 0))
         self.progress = ttk.Progressbar(progress_row, mode="determinate")
         self.progress.pack(side=LEFT, fill=X, expand=True)
@@ -1266,21 +1381,10 @@ class MapperApp:
             progress_row,
             textvariable=self.progress_text,
         ).pack(side=RIGHT, padx=(8, 0))
-        ttk.Label(output_frame, textvariable=self.status).pack(
+        ttk.Label(output_content, textvariable=self.status).pack(
             anchor=W,
             pady=(5, 0),
         )
-
-        actions = ttk.Frame(fixed_bottom)
-        actions.pack(fill=X, pady=(10, 0))
-        for text, command in (
-            ("开始映射", self._run),
-            ("退出", self.root.destroy),
-        ):
-            ttk.Button(actions, text=text, command=command).pack(
-                side=LEFT,
-                padx=(0, 8),
-            )
 
     def _file_panel(
         self,
@@ -1649,6 +1753,7 @@ class MapperApp:
             self._refresh_file_tree(self.source_tree, self.source_files)
             self._refresh_file_tree(self.target_tree, self.target_files)
             self._refresh_rules()
+            self.mapping_notebook.select(0)
         except Exception as exc:
             messagebox.showerror("载入失败", str(exc), parent=self.root)
 
