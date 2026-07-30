@@ -260,6 +260,25 @@ class ExcelMapperTests(unittest.TestCase):
                 ["B1", "B2", "B3"],
             )
 
+    def test_best_name_match_prefers_same_or_common_prefix(self) -> None:
+        self.assertEqual(
+            excel_mapper.best_name_match(
+                "测试数据 - 副本.xlsx",
+                ["空白表.xlsx", "测试数据1.xlsx", "测试数据.xlsx"],
+            ),
+            "测试数据.xlsx",
+        )
+        self.assertEqual(
+            excel_mapper.best_name_match(
+                "江苏分行统计",
+                ["浙江分行统计", "江苏分行汇总", "其他"],
+            ),
+            "江苏分行汇总",
+        )
+        self.assertIsNone(
+            excel_mapper.best_name_match("甲", ["乙", "丙"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
