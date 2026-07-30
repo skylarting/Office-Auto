@@ -626,22 +626,41 @@ def format_cell_addresses(addresses: list[str]) -> str:
     if not addresses:
         return ""
     positions = [split_address(address) for address in addresses]
-    rows = [row for row, _column in positions]
-    columns = [column for _row, column in positions]
-    first_row, last_row = min(rows), max(rows)
-    first_column, last_column = min(columns), max(columns)
-    expected = [
-        (row, column)
-        for column in range(first_column, last_column + 1)
-        for row in range(first_row, last_row + 1)
-    ]
-    if positions == expected:
+    vertical_runs: list[list[int]] = []
+    index = 0
+    while index < len(positions):
+        first_row, column = positions[index]
+        last_row = first_row
+        index += 1
+        while (
+            index < len(positions)
+            and positions[index][1] == column
+            and positions[index][0] == last_row + 1
+        ):
+            last_row = positions[index][0]
+            index += 1
+        vertical_runs.append([column, column, first_row, last_row])
+
+    merged: list[list[int]] = []
+    for run in vertical_runs:
+        if (
+            merged
+            and run[0] == merged[-1][1] + 1
+            and run[2] == merged[-1][2]
+            and run[3] == merged[-1][3]
+        ):
+            merged[-1][1] = run[1]
+        else:
+            merged.append(run)
+
+    parts: list[str] = []
+    for first_column, last_column, first_row, last_row in merged:
         start = (
             f"{column_number_to_letters(first_column + 1)}{first_row + 1}"
         )
         end = f"{column_number_to_letters(last_column + 1)}{last_row + 1}"
-        return start if start == end else f"{start}-{end}"
-    return ",".join(addresses)
+        parts.append(start if start == end else f"{start}-{end}")
+    return ",".join(parts)
 
 
 def normalized_match_name(name: str) -> str:
@@ -872,7 +891,7 @@ class CellPickerDialog:
             x1 + self.COLUMN_WIDTH,
             y1 + self.ROW_HEIGHT,
             fill=original_fill or "white",
-            outline="#1683e2" if selected else "#d6dce2",
+            outline="#d93025" if selected else "#d6dce2",
             width=3 if selected else 1,
             tags=(f"cell-{address}",),
         )
@@ -1352,7 +1371,6 @@ class MapperApp:
         self.txt_base_folder = StringVar()
         self.txt_status = StringVar(value="尚未生成或导入 TXT 方案。")
         self._active_workflow_tab = 0
-        self._switching_workflow_tab = False
         self._updating_txt_editor = False
         self._txt_dirty = False
         self._configure_styles()
@@ -1366,6 +1384,12 @@ class MapperApp:
             padding=(18, 7),
             font=("Microsoft YaHei UI", 10, "bold"),
         )
+        style.configure(
+            "ActiveNav.TButton",
+            padding=(16, 6),
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        style.configure("Nav.TButton", padding=(16, 6))
         style.configure(
             "TLabelframe.Label",
             font=("Microsoft YaHei UI", 10, "bold"),
@@ -1398,29 +1422,39 @@ class MapperApp:
         content = ttk.Frame(container)
         content.pack(fill=BOTH, expand=True)
 
-        self.workflow_notebook = ttk.Notebook(content)
-        self.workflow_notebook.pack(fill=BOTH, expand=True)
-        manual_tab = ttk.Frame(self.workflow_notebook, padding=10)
-        txt_tab = ttk.Frame(self.workflow_notebook, padding=12)
-        self.workflow_notebook.add(manual_tab, text="手动设置")
-        self.workflow_notebook.add(txt_tab, text="TXT 方案")
-        self.workflow_notebook.bind(
-            "<<NotebookTabChanged>>",
-            self._workflow_tab_changed,
+        navigation = ttk.Frame(content)
+        navigation.pack(fill=X, pady=(0, 6))
+        self.manual_nav_button = ttk.Button(
+            navigation,
+            text="手动设置",
+            command=lambda: self._show_workflow_page(0),
+            style="ActiveNav.TButton",
         )
+        self.manual_nav_button.pack(side=LEFT)
+        self.txt_nav_button = ttk.Button(
+            navigation,
+            text="TXT 方案",
+            command=lambda: self._show_workflow_page(1),
+            style="Nav.TButton",
+        )
+        self.txt_nav_button.pack(side=LEFT, padx=(6, 0))
         self.clear_all_button = ttk.Button(
-            content,
+            navigation,
             text="清空所有内容",
             command=self._clear_all_workflow,
             style="Toolbar.TButton",
         )
-        self.clear_all_button.place(
-            relx=1.0,
-            x=-8,
-            y=3,
-            anchor="ne",
-        )
-        self.clear_all_button.lift()
+        self.clear_all_button.pack(side=RIGHT)
+
+        page_host = ttk.Frame(content)
+        page_host.pack(fill=BOTH, expand=True)
+        self.manual_tab = ttk.Frame(page_host, padding=10)
+        self.txt_tab = ttk.Frame(page_host, padding=12)
+        for page in (self.manual_tab, self.txt_tab):
+            page.place(x=0, y=0, relwidth=1, relheight=1)
+        self.manual_tab.tkraise()
+        manual_tab = self.manual_tab
+        txt_tab = self.txt_tab
 
         self.manual_panes = ttk.Panedwindow(manual_tab, orient="vertical")
         self.manual_panes.pack(fill=BOTH, expand=True)
@@ -1523,9 +1557,15 @@ class MapperApp:
             ).pack(side=LEFT, padx=(0, 6))
         ttk.Button(
             self.mapping_actions,
+            text="转换为 TXT →",
+            command=self._convert_manual_to_txt,
+            style="Primary.TButton",
+        ).pack(side=RIGHT)
+        ttk.Button(
+            self.mapping_actions,
             text="预检查",
             command=self._precheck,
-        ).pack(side=RIGHT)
+        ).pack(side=RIGHT, padx=(0, 10))
         ttk.Button(
             self.mapping_actions,
             text="展开预览",
@@ -1548,6 +1588,12 @@ class MapperApp:
                 command=command,
                 style="Toolbar.TButton",
             ).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(
+            plan_actions,
+            text="转换为手动设置 →",
+            command=self._convert_txt_to_manual,
+            style="Primary.TButton",
+        ).pack(side=RIGHT)
 
         base_group = ttk.LabelFrame(
             txt_tab,
@@ -1731,8 +1777,14 @@ class MapperApp:
             show="headings",
             height=4,
         )
-        tree.heading("path", text="文件路径")
-        tree.column("path", width=800, minwidth=430, stretch=False)
+        tree.heading("path", text="文件路径", anchor=W)
+        tree.column(
+            "path",
+            width=430,
+            minwidth=120,
+            stretch=False,
+            anchor=W,
+        )
         tree.grid(row=0, column=0, sticky="nsew")
         vertical = ttk.Scrollbar(
             list_area,
@@ -2106,11 +2158,6 @@ class MapperApp:
         return None
 
     def _sync_manual_to_txt(self) -> None:
-        if self._txt_dirty:
-            self.txt_status.set(
-                "已保留尚未同步的 TXT 内容；执行时再进行完整检查。"
-            )
-            return
         base_folder = self._default_txt_base_folder()
         if base_folder is None:
             self._set_txt_text("")
@@ -2126,6 +2173,28 @@ class MapperApp:
             )
         else:
             self.txt_status.set("尚无映射关系，TXT 内容为空。")
+
+    def _show_workflow_page(self, index: int) -> None:
+        self._active_workflow_tab = index
+        if index == 0:
+            self.manual_tab.tkraise()
+            self.manual_nav_button.configure(style="ActiveNav.TButton")
+            self.txt_nav_button.configure(style="Nav.TButton")
+        else:
+            self.txt_tab.tkraise()
+            self.manual_nav_button.configure(style="Nav.TButton")
+            self.txt_nav_button.configure(style="ActiveNav.TButton")
+
+    def _convert_manual_to_txt(self) -> None:
+        self._sync_manual_to_txt()
+        self._show_workflow_page(1)
+
+    def _convert_txt_to_manual(self) -> None:
+        if self._apply_txt_to_manual(
+            show_message=True,
+            check_workbooks=False,
+        ):
+            self._show_workflow_page(0)
 
     def _apply_txt_to_manual(
         self,
@@ -2178,27 +2247,6 @@ class MapperApp:
         suffix = f"，发现 {len(warnings)} 个目标单元格已有内容" if warnings else ""
         self.txt_status.set(f"TXT 方案已同步，共 {len(rules)} 条映射{suffix}。")
         return True
-
-    def _workflow_tab_changed(self, _event=None) -> None:
-        if (
-            self._switching_workflow_tab
-            or not hasattr(self, "txt_editor")
-        ):
-            return
-        selected = self.workflow_notebook.index(
-            self.workflow_notebook.select()
-        )
-        if selected == self._active_workflow_tab:
-            return
-        if selected == 1:
-            self._sync_manual_to_txt()
-            self._active_workflow_tab = 1
-            return
-        self._apply_txt_to_manual(
-            show_message=False,
-            check_workbooks=False,
-        )
-        self._active_workflow_tab = 0
 
     def _clear_txt_content(self) -> None:
         if self.txt_editor.get("1.0", END).strip() and not messagebox.askyesno(
@@ -2254,15 +2302,11 @@ class MapperApp:
         ).pack(side=LEFT, padx=(8, 0))
 
     def _save_project(self) -> None:
-        if (
-            self.workflow_notebook.index(self.workflow_notebook.select()) == 1
-            and not self._apply_txt_to_manual()
-        ):
-            return
-        if not self.rules:
+        plan_text = self.txt_editor.get("1.0", END).strip()
+        if not plan_text:
             messagebox.showerror(
-                "没有映射关系",
-                "请先添加或导入至少一条映射关系。",
+                "方案内容为空",
+                "请先填写或导入 TXT 方案内容。",
                 parent=self.root,
             )
             return
@@ -2273,13 +2317,31 @@ class MapperApp:
         )
         if selected:
             path = Path(selected)
-            save_mapping_project(path, self.rules)
-            self.txt_base_folder.set(str(path.parent.resolve()))
-            self._set_txt_text(
-                serialize_mapping_project(self.rules, path.parent.resolve())
-            )
-            self._txt_dirty = False
-            self.txt_status.set(f"TXT 方案已保存：{path.name}")
+            try:
+                current_base = (
+                    Path(self.txt_base_folder.get()).resolve()
+                    if self.txt_base_folder.get().strip()
+                    else path.parent.resolve()
+                )
+                _sources, _targets, rules = parse_mapping_project_text(
+                    plan_text,
+                    current_base,
+                )
+                saved_text = serialize_mapping_project(
+                    rules,
+                    path.parent.resolve(),
+                )
+                path.write_text(saved_text, encoding="utf-8-sig")
+                self.txt_base_folder.set(str(path.parent.resolve()))
+                self._set_txt_text(saved_text)
+                self._txt_dirty = False
+                self.txt_status.set(f"TXT 方案已保存：{path.name}")
+            except Exception as exc:
+                messagebox.showerror(
+                    "保存失败",
+                    str(exc),
+                    parent=self.root,
+                )
 
     def _load_project(self) -> None:
         selected = filedialog.askopenfilename(
@@ -2292,11 +2354,10 @@ class MapperApp:
             path = Path(selected)
             self.txt_base_folder.set(str(path.parent.resolve()))
             self._set_txt_text(path.read_text(encoding="utf-8-sig"))
-            self._txt_dirty = True
-            if self._apply_txt_to_manual():
-                self.txt_status.set(
-                    f"已导入并同步 {path.name}，共 {len(self.rules)} 条映射。"
-                )
+            self._txt_dirty = False
+            self.txt_status.set(
+                f"已导入 {path.name}；需要时请点击“转换为手动设置”。"
+            )
         except Exception as exc:
             self.txt_status.set(f"导入失败：{exc}")
             messagebox.showerror("导入失败", str(exc), parent=self.root)
@@ -2306,6 +2367,22 @@ class MapperApp:
         tree.delete(*tree.get_children())
         for path in files:
             tree.insert("", END, values=(str(path),))
+
+        def resize_path_column() -> None:
+            if not tree.winfo_exists():
+                return
+            viewport_width = max(tree.winfo_width() - 20, 220)
+            measured_widths = [
+                int(tree.tk.call("font", "measure", "TkDefaultFont", str(path)))
+                for path in files
+            ]
+            content_width = max(measured_widths, default=0) + 28
+            tree.column(
+                "path",
+                width=max(viewport_width, min(content_width, 3000)),
+            )
+
+        tree.after_idle(resize_path_column)
 
     def _precheck(self) -> bool:
         try:
@@ -2343,11 +2420,6 @@ class MapperApp:
         self.root.update_idletasks()
 
     def _run(self) -> None:
-        if (
-            self.workflow_notebook.index(self.workflow_notebook.select()) == 1
-            and not self._apply_txt_to_manual()
-        ):
-            return
         if not self.output_folder.get().strip():
             messagebox.showerror(
                 "缺少输出位置",
@@ -2356,10 +2428,21 @@ class MapperApp:
             )
             return
         try:
+            source_files = self.source_files
+            target_files = self.target_files
+            rules = self.rules
+            if self._active_workflow_tab == 1:
+                base_text = self.txt_base_folder.get().strip()
+                if not base_text:
+                    raise ValueError("请先选择方案基准文件夹。")
+                source_files, target_files, rules = parse_mapping_project_text(
+                    self.txt_editor.get("1.0", END),
+                    Path(base_text).resolve(),
+                )
             expanded, warnings = validate_mapping_plan(
-                self.source_files,
-                self.target_files,
-                self.rules,
+                source_files,
+                target_files,
+                rules,
             )
             if warnings and not messagebox.askyesno(
                 "确认覆盖副本中的内容",
@@ -2371,9 +2454,9 @@ class MapperApp:
             self.progress.configure(maximum=max(len(expanded), 1), value=0)
             self.progress_text.set("0%")
             outputs = execute_mapping_plan(
-                self.source_files,
-                self.target_files,
-                self.rules,
+                source_files,
+                target_files,
+                rules,
                 Path(self.output_folder.get()),
                 self._progress,
             )
