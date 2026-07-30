@@ -331,6 +331,31 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertEqual(rules[0].target_cells, ["A1", "A2", "A3"])
             self.assertEqual(rules[1].target_cells, ["D5"])
 
+    def test_compact_scheme_keeps_source_without_target_as_editable_draft(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            scheme = folder / "未完成方案.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["工作簿", "工作表", "单元格"])
+            sheet.append(["来源一.xlsx", "数据", "A1-A3"])
+            workbook.save(scheme)
+            workbook.close()
+
+            sources, targets, rules = (
+                excel_mapper.load_excel_mapping_scheme(scheme)
+            )
+
+            self.assertEqual(len(rules), 1)
+            self.assertEqual(len(sources), 1)
+            self.assertEqual(targets, [])
+            self.assertEqual(rules[0].target_file, "")
+            self.assertEqual(rules[0].target_sheet, "")
+            self.assertEqual(rules[0].source_row, 2)
+            self.assertIsNone(rules[0].target_row)
+
     def test_project_text_can_be_serialized_and_parsed_in_memory(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

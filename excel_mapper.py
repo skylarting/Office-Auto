@@ -89,6 +89,8 @@ class MappingRule:
     target_sheet: str
     target_cells: list[str]
     mode: str
+    source_row: int | None = None
+    target_row: int | None = None
 
 
 @dataclass
@@ -681,7 +683,11 @@ def save_excel_mapping_scheme(
             [
                 index,
                 "目标",
-                format_project_path(Path(rule.target_file), base_folder),
+                (
+                    format_project_path(Path(rule.target_file), base_folder)
+                    if rule.target_file
+                    else ""
+                ),
                 rule.target_sheet,
                 target_cells,
             ]
@@ -789,43 +795,58 @@ def load_excel_mapping_scheme(
     targets: list[Path] = []
     rules: list[MappingRule] = []
     for group, entries in groups.items():
-        if "来源" not in entries or "目标" not in entries:
-            raise ValueError(f"映射组 {group} 必须同时包含来源行和目标行。")
+        if "来源" not in entries:
+            raise ValueError(f"映射组 {group} 缺少来源行。")
         source_row, source = entries["来源"]
-        target_row, target = entries["目标"]
+        target_entry = entries.get("目标")
+        target_row = target_entry[0] if target_entry else None
+        target = target_entry[1] if target_entry else None
         try:
             source_path = resolve_project_path(str(source[2]), base_folder)
-            target_path = resolve_project_path(str(target[2]), base_folder)
             source_sheet = str(source[3]).strip()
-            target_sheet = str(target[3]).strip()
-            if not source_sheet or not target_sheet:
-                raise ValueError("工作表名称不能为空。")
+            if not source_sheet:
+                raise ValueError("来源工作表名称不能为空。")
             source_cells = parse_cell_addresses(str(source[4]))
-            target_text = str(target[4]).strip()
-            target_cells = (
-                list(source_cells)
-                if target_text in ("同位置", "与读取单元格相同")
-                else parse_cell_addresses(target_text)
-            )
+            if target is None:
+                target_path = None
+                target_sheet = ""
+                target_cells = list(source_cells)
+            else:
+                target_path = resolve_project_path(
+                    str(target[2]),
+                    base_folder,
+                )
+                target_sheet = str(target[3]).strip()
+                if not target_sheet:
+                    raise ValueError("目标工作表名称不能为空。")
+                target_text = str(target[4]).strip()
+                target_cells = (
+                    list(source_cells)
+                    if target_text in ("同位置", "与读取单元格相同")
+                    else parse_cell_addresses(target_text)
+                )
             mode = infer_mapping_mode(source_cells, target_cells)
         except ValueError as exc:
             raise ValueError(
-                f"映射组 {group}（第 {source_row}/{target_row} 行）：{exc}"
+                f"映射组 {group}（第 {source_row}"
+                f"{f'/{target_row}' if target_row else ''} 行）：{exc}"
             ) from exc
         rules.append(
             MappingRule(
                 str(source_path),
                 source_sheet,
                 source_cells,
-                str(target_path),
+                str(target_path) if target_path else "",
                 target_sheet,
                 target_cells,
                 mode,
+                source_row,
+                target_row,
             )
         )
         if source_path not in sources:
             sources.append(source_path)
-        if target_path not in targets:
+        if target_path is not None and target_path not in targets:
             targets.append(target_path)
     if not rules:
         raise ValueError("Excel 方案中没有可用的映射关系。")
@@ -2799,9 +2820,10 @@ class MapperApp:
     ) -> tuple[str, list[str]]:
         is_source = kind == "source"
         if column == "#3":
-            path = Path(
+            path_text = (
                 rule.source_file if is_source else rule.target_file
             )
+            path = Path(path_text) if path_text else None
             base = self._default_scheme_base_folder()
             candidates: list[str] = []
             if base is not None and base.is_dir():
@@ -2813,21 +2835,23 @@ class MapperApp:
                 except OSError:
                     candidates = []
             return (
-                format_project_path(
-                    path,
-                    base,
-                ),
+                format_project_path(path, base) if path is not None else "",
                 candidates,
             )
         if column == "#4":
-            path = Path(
+            path_text = (
                 rule.source_file if is_source else rule.target_file
             )
+            path = Path(path_text) if path_text else None
             current = (
                 rule.source_sheet if is_source else rule.target_sheet
             )
             try:
-                names = workbook_sheet_names(path) if path.exists() else []
+                names = (
+                    workbook_sheet_names(path)
+                    if path is not None and path.exists()
+                    else []
+                )
             except Exception:
                 names = []
             return current, names
@@ -3090,7 +3114,11 @@ class MapperApp:
         for index, rule in enumerate(self.scheme_rules):
             group = index + 1
             source_file = format_project_path(Path(rule.source_file), base)
-            target_file = format_project_path(Path(rule.target_file), base)
+            target_file = (
+                format_project_path(Path(rule.target_file), base)
+                if rule.target_file
+                else ""
+            )
             self.scheme_tree.insert(
                 "",
                 END,
@@ -3182,8 +3210,7 @@ class MapperApp:
             if not self.output_folder.get().strip():
                 self.output_folder.set(str(path.parent.resolve() / "映射结果"))
             self.scheme_status.set(
-                f"已导入 {path.name}，共 {len(self.scheme_rules)} 组映射；"
-                "需要时可转换为手动设置。"
+                self._scheme_import_status(path.name)
             )
         except Exception as exc:
             self.scheme_status.set(f"导入失败：{exc}")
@@ -3260,6 +3287,17 @@ class MapperApp:
             return self.source_files, self.target_files, self.rules
         if not self.scheme_rules:
             raise ValueError("请先导入 Excel 方案，或从手动设置生成方案。")
+        for index, rule in enumerate(self.scheme_rules, start=1):
+            if not rule.target_file or not rule.target_sheet:
+                source_line = (
+                    f"（导入表第 {rule.source_row} 行）"
+                    if rule.source_row
+                    else ""
+                )
+                raise ValueError(
+                    f"第 {index} 组{source_line}只有来源，"
+                    "请在空白目标行补充目标工作簿和工作表。"
+                )
         sources = list(
             dict.fromkeys(Path(rule.source_file) for rule in self.scheme_rules)
         )
@@ -3267,6 +3305,28 @@ class MapperApp:
             dict.fromkeys(Path(rule.target_file) for rule in self.scheme_rules)
         )
         return sources, targets, self.scheme_rules
+
+    def _scheme_import_status(self, file_name: str) -> str:
+        incomplete = [
+            (index, rule.source_row)
+            for index, rule in enumerate(self.scheme_rules, start=1)
+            if not rule.target_file or not rule.target_sheet
+        ]
+        if not incomplete:
+            return (
+                f"已导入 {file_name}，共 {len(self.scheme_rules)} 组映射。"
+            )
+        details = "；".join(
+            (
+                f"第 {index} 组"
+                + (f"（来源在第 {row} 行）" if row else "")
+            )
+            for index, row in incomplete
+        )
+        return (
+            f"已导入并展示 {len(self.scheme_rules)} 组映射；"
+            f"{details}缺少目标，请在空白目标行继续填写。"
+        )
 
     def _progress(self, current: int, total: int, message: str) -> None:
         maximum = max(total, 1)
