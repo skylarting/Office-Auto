@@ -1377,20 +1377,19 @@ class MapperApp:
             "<<NotebookTabChanged>>",
             self._workflow_tab_changed,
         )
-
-        manual_toolbar = ttk.Frame(manual_tab)
-        manual_toolbar.pack(fill=X, pady=(0, 8))
-        ttk.Label(
-            manual_toolbar,
-            text="工作簿与映射设置",
-            style="Section.TLabel",
-        ).pack(side=LEFT)
-        ttk.Button(
-            manual_toolbar,
+        self.clear_all_button = ttk.Button(
+            content,
             text="清空所有内容",
-            command=self._clear_manual_all,
+            command=self._clear_all_workflow,
             style="Toolbar.TButton",
-        ).pack(side=RIGHT)
+        )
+        self.clear_all_button.place(
+            relx=1.0,
+            x=-8,
+            y=3,
+            anchor="ne",
+        )
+        self.clear_all_button.lift()
 
         self.manual_panes = ttk.Panedwindow(manual_tab, orient="vertical")
         self.manual_panes.pack(fill=BOTH, expand=True)
@@ -1518,16 +1517,6 @@ class MapperApp:
                 command=command,
                 style="Toolbar.TButton",
             ).pack(side=LEFT, padx=(0, 6))
-        ttk.Separator(
-            plan_actions,
-            orient="vertical",
-        ).pack(side=LEFT, fill="y", padx=(4, 10))
-        ttk.Button(
-            plan_actions,
-            text="清空内容",
-            command=self._clear_txt_content,
-            style="Toolbar.TButton",
-        ).pack(side=LEFT)
 
         base_group = ttk.LabelFrame(
             txt_tab,
@@ -1701,15 +1690,35 @@ class MapperApp:
             sticky="nsew",
             padx=(0, 5) if column == 0 else (5, 0),
         )
+        list_area = ttk.Frame(frame)
+        list_area.pack(fill=BOTH, expand=True)
+        list_area.columnconfigure(0, weight=1)
+        list_area.rowconfigure(0, weight=1)
         tree = ttk.Treeview(
-            frame,
+            list_area,
             columns=("path",),
             show="headings",
             height=4,
         )
         tree.heading("path", text="文件路径")
-        tree.column("path", width=430)
-        tree.pack(fill=BOTH, expand=True)
+        tree.column("path", width=800, minwidth=430, stretch=False)
+        tree.grid(row=0, column=0, sticky="nsew")
+        vertical = ttk.Scrollbar(
+            list_area,
+            orient="vertical",
+            command=tree.yview,
+        )
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal = ttk.Scrollbar(
+            list_area,
+            orient="horizontal",
+            command=tree.xview,
+        )
+        horizontal.grid(row=1, column=0, sticky="ew")
+        tree.configure(
+            yscrollcommand=vertical.set,
+            xscrollcommand=horizontal.set,
+        )
         actions = ttk.Frame(frame)
         actions.pack(fill=X, pady=(6, 0))
         ttk.Button(actions, text="添加文件", command=add_command).pack(side=LEFT)
@@ -1919,13 +1928,23 @@ class MapperApp:
             self.rules.clear()
             self._refresh_rules()
 
-    def _clear_manual_all(self) -> None:
-        if not (self.source_files or self.target_files or self.rules):
-            self.status.set("手动设置中没有需要清空的内容。")
+    def _clear_all_workflow(self) -> None:
+        has_txt_content = (
+            hasattr(self, "txt_editor")
+            and bool(self.txt_editor.get("1.0", END).strip())
+        )
+        if not (
+            self.source_files
+            or self.target_files
+            or self.rules
+            or has_txt_content
+            or self.txt_base_folder.get().strip()
+        ):
+            self.status.set("当前方案中没有需要清空的内容。")
             return
         if not messagebox.askyesno(
-            "清空手动设置",
-            "确定清空全部来源工作簿、目标工作簿和映射关系吗？",
+            "清空所有内容",
+            "确定清空手动设置和 TXT 方案中的全部内容吗？",
             parent=self.root,
         ):
             return
@@ -1935,8 +1954,11 @@ class MapperApp:
         self._refresh_file_tree(self.source_tree, self.source_files)
         self._refresh_file_tree(self.target_tree, self.target_files)
         self._refresh_rules()
+        self._set_txt_text("")
+        self.txt_base_folder.set("")
         self._txt_dirty = False
-        self.status.set("已清空手动设置中的全部内容。")
+        self.txt_status.set("TXT 方案内容已清空。")
+        self.status.set("已清空手动设置和 TXT 方案中的全部内容。")
 
     def _refresh_rules(self) -> None:
         self.mapping_tree.delete(*self.mapping_tree.get_children())
