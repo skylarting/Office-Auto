@@ -15,6 +15,7 @@ from tkinter import (
     W,
     X,
     Canvas,
+    Menu,
     StringVar,
     Text,
     Tk,
@@ -1901,12 +1902,22 @@ class MapperApp:
         base_group.pack(fill=X, pady=(0, 10))
         base_row = ttk.Frame(base_group)
         base_row.pack(fill=X)
-        ttk.Label(base_row, text="方案基准文件夹：").pack(side=LEFT)
-        ttk.Entry(
+        ttk.Label(base_row, text="默认文件夹：").pack(side=LEFT)
+        self.scheme_base_entry = ttk.Entry(
             base_row,
             textvariable=self.scheme_base_folder,
             state="readonly",
-        ).pack(side=LEFT, fill=X, expand=True)
+        )
+        self.scheme_base_entry.pack(side=LEFT, fill=X, expand=True)
+        self.scheme_base_entry.bind(
+            "<Double-1>",
+            lambda _event: self._browse_scheme_base(),
+        )
+        ttk.Button(
+            base_row,
+            text="选择文件夹…",
+            command=self._browse_scheme_base,
+        ).pack(side=LEFT, padx=(8, 0))
 
         scheme_group = ttk.LabelFrame(
             scheme_tab,
@@ -1969,26 +1980,43 @@ class MapperApp:
             "<Return>",
             self._begin_selected_scheme_cell_edit,
         )
+        self.scheme_tree.bind(
+            "<Delete>",
+            lambda _event: self._delete_scheme_rule(),
+        )
+        self.scheme_tree.bind(
+            "<Button-3>",
+            self._show_scheme_context_menu,
+        )
+        self.scheme_context_menu = Menu(self.root, tearoff=False)
+        self.scheme_context_menu.add_command(
+            label="在上方插入映射组",
+            command=lambda: self._insert_scheme_rule("before"),
+        )
+        self.scheme_context_menu.add_command(
+            label="在下方插入映射组",
+            command=lambda: self._insert_scheme_rule("after"),
+        )
+        self.scheme_context_menu.add_command(
+            label="复制本组",
+            command=self._duplicate_scheme_rule,
+        )
+        self.scheme_context_menu.add_separator()
+        self.scheme_context_menu.add_command(
+            label="删除本组",
+            command=self._delete_scheme_rule,
+        )
         scheme_actions = ttk.Frame(scheme_group)
         scheme_actions.pack(fill=X, pady=(8, 0))
-        for text, command in (
-            ("新增映射组", self._add_scheme_rule),
-            ("复制选中组", self._duplicate_scheme_rule),
-            ("删除选中组", self._delete_scheme_rule),
-        ):
-            ttk.Button(
-                scheme_actions,
-                text=text,
-                command=command,
-            ).pack(side=LEFT, padx=(0, 6))
         ttk.Label(
             scheme_actions,
             text=(
-                "单击：下拉/表格选择　　"
-                "双击：手工输入"
+                "直接填写底部空白组即可新增　　"
+                "单击：选择　　双击：输入　　"
+                "Delete/右键：整组操作"
             ),
             style="Muted.TLabel",
-        ).pack(side=RIGHT)
+        ).pack(side=LEFT)
         ttk.Label(
             scheme_tab,
             textvariable=self.scheme_status,
@@ -2408,6 +2436,25 @@ class MapperApp:
         if selected:
             self.output_folder.set(selected)
 
+    def _browse_scheme_base(self) -> None:
+        selected = filedialog.askdirectory(
+            title="选择 Excel 方案默认文件夹",
+            initialdir=(
+                self.scheme_base_folder.get().strip()
+                or str(Path.cwd())
+            ),
+        )
+        if not selected:
+            return
+        self.scheme_base_folder.set(str(Path(selected).resolve()))
+        if not self.output_folder.get().strip():
+            self.output_folder.set(str(Path(selected).resolve() / "映射结果"))
+        self._refresh_scheme_tree()
+        count = len(workbook_files_in_folder(Path(selected)))
+        self.scheme_status.set(
+            f"默认文件夹已更新，找到 {count} 个 Excel 工作簿。"
+        )
+
     def _default_scheme_base_folder(self) -> Path | None:
         configured = self.scheme_base_folder.get().strip()
         if configured:
@@ -2490,7 +2537,7 @@ class MapperApp:
         except (IndexError, ValueError):
             return None
 
-    def _add_scheme_rule(self) -> None:
+    def _new_scheme_rule(self) -> MappingRule:
         base = self._default_scheme_base_folder() or Path.cwd()
         source_file = (
             Path(self.scheme_rules[-1].source_file)
@@ -2512,17 +2559,19 @@ class MapperApp:
             if self.scheme_rules
             else "目标工作表"
         )
-        self.scheme_rules.append(
-            MappingRule(
-                str(source_file),
-                source_sheet,
-                ["A1"],
-                str(target_file),
-                target_sheet,
-                ["A1"],
-                MODE_MANUAL,
-            )
+        return MappingRule(
+            str(source_file),
+            source_sheet,
+            ["A1"],
+            str(target_file),
+            target_sheet,
+            ["A1"],
+            MODE_MANUAL,
         )
+
+    def _add_scheme_rule(self) -> None:
+        base = self._default_scheme_base_folder() or Path.cwd()
+        self.scheme_rules.append(self._new_scheme_rule())
         if not self.scheme_base_folder.get().strip():
             self.scheme_base_folder.set(str(base))
         self._refresh_scheme_tree()
@@ -2531,6 +2580,52 @@ class MapperApp:
         self.scheme_tree.focus(iid)
         self.scheme_tree.see(iid)
         self.scheme_status.set("已新增映射组；双击单元格可直接填写。")
+
+    def _materialize_blank_scheme_row(self, iid: str) -> str:
+        if not iid.startswith("scheme:new:"):
+            return iid
+        kind = iid.rsplit(":", 1)[-1]
+        base = self._default_scheme_base_folder() or Path.cwd()
+        self.scheme_rules.append(self._new_scheme_rule())
+        if not self.scheme_base_folder.get().strip():
+            self.scheme_base_folder.set(str(base))
+        index = len(self.scheme_rules) - 1
+        self._refresh_scheme_tree()
+        actual_iid = f"scheme:{index}:{kind}"
+        self.scheme_tree.selection_set(actual_iid)
+        self.scheme_tree.focus(actual_iid)
+        self.scheme_tree.see(actual_iid)
+        return actual_iid
+
+    def _insert_scheme_rule(self, position: str) -> None:
+        index = self._selected_scheme_rule_index()
+        if index is None:
+            index = len(self.scheme_rules)
+        elif position == "after":
+            index += 1
+        self.scheme_rules.insert(index, self._new_scheme_rule())
+        self._refresh_scheme_tree()
+        iid = f"scheme:{index}:source"
+        self.scheme_tree.selection_set(iid)
+        self.scheme_tree.focus(iid)
+        self.scheme_tree.see(iid)
+        self.scheme_status.set("已插入空白映射组。")
+
+    def _show_scheme_context_menu(self, event) -> str:
+        iid = self.scheme_tree.identify_row(event.y)
+        if not iid:
+            return "break"
+        self.scheme_tree.selection_set(iid)
+        self.scheme_tree.focus(iid)
+        is_blank = iid.startswith("scheme:new:")
+        state = "disabled" if is_blank else "normal"
+        self.scheme_context_menu.entryconfigure(2, state=state)
+        self.scheme_context_menu.entryconfigure(4, state=state)
+        try:
+            self.scheme_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.scheme_context_menu.grab_release()
+        return "break"
 
     def _duplicate_scheme_rule(self) -> None:
         index = self._selected_scheme_rule_index()
@@ -2666,6 +2761,7 @@ class MapperApp:
         open_dropdown: bool = False,
     ) -> None:
         self._cancel_scheme_editor()
+        iid = self._materialize_blank_scheme_row(iid)
         try:
             _, index_text, kind = iid.split(":")
             index = int(index_text)
@@ -2727,6 +2823,7 @@ class MapperApp:
 
     def _pick_scheme_cells(self, iid: str) -> None:
         try:
+            iid = self._materialize_blank_scheme_row(iid)
             _, index_text, kind = iid.split(":")
             index = int(index_text)
             rule = self.scheme_rules[index]
@@ -2943,6 +3040,21 @@ class MapperApp:
                 ),
                 tags=("target",),
             )
+        next_group = len(self.scheme_rules) + 1
+        self.scheme_tree.insert(
+            "",
+            END,
+            iid="scheme:new:source",
+            values=(next_group, "来源", "", "", ""),
+            tags=("source",),
+        )
+        self.scheme_tree.insert(
+            "",
+            END,
+            iid="scheme:new:target",
+            values=(next_group, "目标", "", "", "同位置"),
+            tags=("target",),
+        )
 
     def _save_excel_scheme(self) -> None:
         if not self.scheme_rules:
