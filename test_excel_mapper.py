@@ -304,6 +304,33 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertEqual(loaded[0].source_cells, ["A1", "A2", "B1", "B2"])
             self.assertEqual(loaded[0].target_cells, loaded[0].source_cells)
 
+    def test_compact_excel_scheme_infers_alternating_source_target_rows(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            scheme = folder / "精简映射方案.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["工作簿", "工作表", "单元格"])
+            sheet.append(["来源一.xlsx", "数据", "A1-A3"])
+            sheet.append(["目标一.xlsx", "模板", "同位置"])
+            sheet.append(["来源二.xlsx", "汇总", "C2"])
+            sheet.append(["目标二.xlsx", "报表", "D5"])
+            workbook.save(scheme)
+            workbook.close()
+
+            sources, targets, rules = (
+                excel_mapper.load_excel_mapping_scheme(scheme)
+            )
+
+            self.assertEqual(len(rules), 2)
+            self.assertEqual(sources[0], (folder / "来源一.xlsx").resolve())
+            self.assertEqual(targets[1], (folder / "目标二.xlsx").resolve())
+            self.assertEqual(rules[0].source_cells, ["A1", "A2", "A3"])
+            self.assertEqual(rules[0].target_cells, ["A1", "A2", "A3"])
+            self.assertEqual(rules[1].target_cells, ["D5"])
+
     def test_project_text_can_be_serialized_and_parsed_in_memory(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

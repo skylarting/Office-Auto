@@ -650,6 +650,7 @@ def load_mapping_project(
 
 
 SCHEME_HEADERS = ("映射组", "类型", "工作簿", "工作表", "单元格")
+COMPACT_SCHEME_HEADERS = ("工作簿", "工作表", "单元格")
 
 
 def save_excel_mapping_scheme(
@@ -743,13 +744,31 @@ def load_excel_mapping_scheme(
     try:
         sheet = workbook["映射方案"] if "映射方案" in workbook.sheetnames else workbook.active
         headers = tuple(sheet.cell(1, column).value for column in range(1, 6))
-        if headers != SCHEME_HEADERS:
+        standard_layout = headers == SCHEME_HEADERS
+        compact_layout = headers[:3] == COMPACT_SCHEME_HEADERS
+        if not standard_layout and not compact_layout:
             raise ValueError(
-                "方案表头必须依次为：映射组、类型、工作簿、工作表、单元格。"
+                "方案表头应为以下任意一种：\n"
+                "1. 映射组、类型、工作簿、工作表、单元格\n"
+                "2. 工作簿、工作表、单元格"
             )
         groups: dict[str, dict[str, tuple[int, list[object]]]] = {}
+        compact_row_index = 0
         for row_number in range(2, sheet.max_row + 1):
-            values = [sheet.cell(row_number, column).value for column in range(1, 6)]
+            column_count = 5 if standard_layout else 3
+            raw_values = [
+                sheet.cell(row_number, column).value
+                for column in range(1, column_count + 1)
+            ]
+            if all(value in (None, "") for value in raw_values):
+                continue
+            if compact_layout:
+                group = str(compact_row_index // 2 + 1)
+                kind = "来源" if compact_row_index % 2 == 0 else "目标"
+                values = [group, kind, *raw_values]
+                compact_row_index += 1
+            else:
+                values = raw_values
             if all(value in (None, "") for value in values):
                 continue
             group = str(values[0]).strip()
@@ -2384,7 +2403,8 @@ class MapperApp:
 
     def _preview_expanded(self) -> None:
         try:
-            expanded = expand_rules(self.rules)
+            _sources, _targets, rules = self._active_plan()
+            expanded = expand_rules(rules)
         except ValueError as exc:
             messagebox.showerror("无法展开映射", str(exc), parent=self.root)
             return
