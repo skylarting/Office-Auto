@@ -35,6 +35,9 @@ DEFAULT_CELL_ADDRESSES = [
     "A2", "C2", "A3", "C3",
 ]
 VALID_CELL_RE = re.compile(r"^[A-Z]{1,3}[1-9][0-9]*$")
+CELL_RANGE_RE = re.compile(
+    r"^([A-Z]{1,3}[1-9][0-9]*)-([A-Z]{1,3}[1-9][0-9]*)$"
+)
 WORKBOOK_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
 
 
@@ -55,7 +58,17 @@ def parse_cell_addresses(raw_text: str) -> list[str]:
     for part in parts:
         if not part:
             continue
-        if not VALID_CELL_RE.fullmatch(part):
+        range_match = CELL_RANGE_RE.fullmatch(part)
+        if range_match:
+            try:
+                expanded = expand_cell_range(*range_match.groups())
+            except ValueError:
+                invalid.append(part)
+                continue
+            for address in expanded:
+                if address not in addresses:
+                    addresses.append(address)
+        elif not VALID_CELL_RE.fullmatch(part):
             invalid.append(part)
         elif part not in addresses:
             addresses.append(part)
@@ -65,6 +78,25 @@ def parse_cell_addresses(raw_text: str) -> list[str]:
     if not addresses:
         raise ValueError("请至少填写一个需要提取的单元格地址。")
     return addresses
+
+
+def expand_cell_range(start: str, end: str) -> list[str]:
+    start_column_text = "".join(char for char in start if char.isalpha())
+    start_row = int("".join(char for char in start if char.isdigit()))
+    end_column_text = "".join(char for char in end if char.isalpha())
+    end_row = int("".join(char for char in end if char.isdigit()))
+    start_column = column_letters_to_number(start_column_text)
+    end_column = column_letters_to_number(end_column_text)
+    first_column, last_column = sorted((start_column, end_column))
+    first_row, last_row = sorted((start_row, end_row))
+    count = (last_column - first_column + 1) * (last_row - first_row + 1)
+    if count > 10000:
+        raise ValueError("单元格范围过大。")
+    return [
+        f"{column_number_to_letters(column)}{row}"
+        for row in range(first_row, last_row + 1)
+        for column in range(first_column, last_column + 1)
+    ]
 
 
 def is_source_workbook(path: Path, summary_name: str = "汇总") -> bool:
@@ -1446,4 +1478,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
