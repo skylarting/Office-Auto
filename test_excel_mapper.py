@@ -134,6 +134,12 @@ class ExcelMapperTests(unittest.TestCase):
             source_book["数据"]["C2"].number_format = "0"
             source_book.save(source)
             source_book.close()
+            target_book = load_workbook(target_one)
+            target_cell = target_book["模板"]["B5"]
+            target_cell.fill = PatternFill("solid", fgColor="F4B183")
+            target_cell.number_format = "0.00"
+            target_book.save(target_one)
+            target_book.close()
 
             rules = [
                 excel_mapper.MappingRule(
@@ -170,7 +176,11 @@ class ExcelMapperTests(unittest.TestCase):
             mapped_one = load_workbook(output / "目标一_已映射.xlsx")
             self.assertEqual(mapped_one["模板"]["B5"].value, 12.6)
             self.assertEqual(mapped_one["模板"]["D5"].value, 34.4)
-            self.assertEqual(mapped_one["模板"]["B5"].number_format, "0")
+            self.assertEqual(mapped_one["模板"]["B5"].number_format, "0.00")
+            self.assertEqual(
+                mapped_one["模板"]["B5"].fill.fgColor.rgb,
+                "00F4B183",
+            )
             mapped_one.close()
 
             mapped_two = load_workbook(output / "目标二_已映射.xlsx")
@@ -237,12 +247,62 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertEqual(rules[0].source_cells, ["A2"])
             self.assertEqual(rules[0].target_cells, ["B5"])
             self.assertEqual(output, (folder / "映射结果").resolve())
-
             text = project.read_text(encoding="utf-8-sig")
             self.assertEqual(
                 text,
                 "【来源.xlsx；数据；A2 → 目标.xlsx；模板；B5】\n",
             )
+
+    def test_excel_scheme_uses_paired_source_and_target_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            scheme = folder / "映射方案.xlsx"
+            source = folder / "来源.xlsx"
+            target = folder / "目标.xlsx"
+            rules = [
+                excel_mapper.MappingRule(
+                    str(source),
+                    "数据",
+                    ["A1", "A2", "B1", "B2"],
+                    str(target),
+                    "模板",
+                    ["A1", "A2", "B1", "B2"],
+                    excel_mapper.MODE_SEQUENCE,
+                )
+            ]
+
+            excel_mapper.save_excel_mapping_scheme(
+                scheme,
+                rules,
+                folder,
+            )
+            workbook = load_workbook(scheme)
+            sheet = workbook["映射方案"]
+            self.assertEqual(
+                [cell.value for cell in sheet[1]],
+                list(excel_mapper.SCHEME_HEADERS),
+            )
+            self.assertEqual(
+                [cell.value for cell in sheet[2]],
+                [1, "来源", "来源.xlsx", "数据", "A1-B2"],
+            )
+            self.assertEqual(
+                [cell.value for cell in sheet[3]],
+                [1, "目标", "目标.xlsx", "模板", "同位置"],
+            )
+            self.assertNotEqual(
+                sheet["A2"].fill.fgColor.rgb,
+                sheet["A3"].fill.fgColor.rgb,
+            )
+            workbook.close()
+
+            sources, targets, loaded = (
+                excel_mapper.load_excel_mapping_scheme(scheme)
+            )
+            self.assertEqual(sources, [source.resolve()])
+            self.assertEqual(targets, [target.resolve()])
+            self.assertEqual(loaded[0].source_cells, ["A1", "A2", "B1", "B2"])
+            self.assertEqual(loaded[0].target_cells, loaded[0].source_cells)
 
     def test_project_text_can_be_serialized_and_parsed_in_memory(self) -> None:
         with TemporaryDirectory() as temp_dir:

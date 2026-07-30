@@ -25,7 +25,8 @@ from tkinter import (
 from typing import Callable
 
 import xlrd
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.styles.colors import COLOR_INDEX
 
 from export_summary import (
@@ -462,7 +463,6 @@ def execute_mapping_plan(
                 )
             target_cell = target_book[mapping.target_sheet][mapping.target_cell]
             target_cell.value = cell_data.value
-            target_cell.number_format = cell_data.number_format
             if progress:
                 progress(index, total, f"已完成 {index}/{total} 项映射")
 
@@ -517,6 +517,170 @@ def load_mapping_project(
         path.parent,
     )
     return sources, targets, rules, (path.parent / "映射结果").resolve()
+
+
+SCHEME_HEADERS = ("映射组", "类型", "工作簿", "工作表", "单元格")
+
+
+def save_excel_mapping_scheme(
+    path: Path,
+    rules: list[MappingRule],
+    base_folder: Path,
+) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "映射方案"
+    sheet.append(SCHEME_HEADERS)
+    for index, rule in enumerate(rules, start=1):
+        sheet.append(
+            [
+                index,
+                "来源",
+                format_project_path(Path(rule.source_file), base_folder),
+                rule.source_sheet,
+                format_cell_addresses(rule.source_cells),
+            ]
+        )
+        target_cells = (
+            "同位置"
+            if rule.source_cells == rule.target_cells
+            else format_cell_addresses(rule.target_cells)
+        )
+        sheet.append(
+            [
+                index,
+                "目标",
+                format_project_path(Path(rule.target_file), base_folder),
+                rule.target_sheet,
+                target_cells,
+            ]
+        )
+    format_excel_mapping_sheet(sheet)
+    instructions = workbook.create_sheet("填写说明")
+    instructions.append(["Excel 单元格映射方案填写说明"])
+    instructions.append(["每个映射组必须包含一行“来源”和一行“目标”。"])
+    instructions.append(["工作簿可填写绝对路径，或相对于方案文件所在文件夹的路径。"])
+    instructions.append(["单元格支持 A1、A1-A3、A1-B3；目标可填写“同位置”。"])
+    instructions.column_dimensions["A"].width = 88
+    instructions["A1"].font = Font(bold=True, size=14)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    workbook.close()
+
+
+def save_blank_excel_mapping_template(path: Path) -> None:
+    placeholder = MappingRule(
+        source_file="来源工作簿.xlsx",
+        source_sheet="来源工作表名称",
+        source_cells=["A1"],
+        target_file="目标工作簿.xlsx",
+        target_sheet="目标工作表名称",
+        target_cells=["A1"],
+        mode=MODE_MANUAL,
+    )
+    save_excel_mapping_scheme(path, [placeholder], path.parent.resolve())
+
+
+def format_excel_mapping_sheet(sheet) -> None:
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    source_fill = PatternFill("solid", fgColor="DDEBF7")
+    target_fill = PatternFill("solid", fgColor="E2F0D9")
+    thin = Side(style="thin", color="B7C9D6")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+    for row in sheet.iter_rows(min_row=2):
+        fill = source_fill if row[1].value == "来源" else target_fill
+        for cell in row:
+            cell.fill = fill
+            cell.border = border
+            cell.alignment = Alignment(vertical="center")
+    for column, width in zip("ABCDE", (10, 10, 42, 24, 28)):
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+
+
+def load_excel_mapping_scheme(
+    path: Path,
+) -> tuple[list[Path], list[Path], list[MappingRule]]:
+    if path.suffix.lower() not in (".xlsx", ".xlsm"):
+        raise ValueError("Excel 映射方案必须是 .xlsx 或 .xlsm 文件。")
+    workbook = load_workbook(path, data_only=True, read_only=True)
+    try:
+        sheet = workbook["映射方案"] if "映射方案" in workbook.sheetnames else workbook.active
+        headers = tuple(sheet.cell(1, column).value for column in range(1, 6))
+        if headers != SCHEME_HEADERS:
+            raise ValueError(
+                "方案表头必须依次为：映射组、类型、工作簿、工作表、单元格。"
+            )
+        groups: dict[str, dict[str, tuple[int, list[object]]]] = {}
+        for row_number in range(2, sheet.max_row + 1):
+            values = [sheet.cell(row_number, column).value for column in range(1, 6)]
+            if all(value in (None, "") for value in values):
+                continue
+            group = str(values[0]).strip()
+            kind = str(values[1]).strip()
+            if not group or kind not in ("来源", "目标"):
+                raise ValueError(
+                    f"第 {row_number} 行的映射组或类型不正确；类型只能填写来源或目标。"
+                )
+            entries = groups.setdefault(group, {})
+            if kind in entries:
+                raise ValueError(f"映射组 {group} 存在重复的“{kind}”行。")
+            entries[kind] = (row_number, values)
+    finally:
+        workbook.close()
+
+    base_folder = path.parent.resolve()
+    sources: list[Path] = []
+    targets: list[Path] = []
+    rules: list[MappingRule] = []
+    for group, entries in groups.items():
+        if "来源" not in entries or "目标" not in entries:
+            raise ValueError(f"映射组 {group} 必须同时包含来源行和目标行。")
+        source_row, source = entries["来源"]
+        target_row, target = entries["目标"]
+        try:
+            source_path = resolve_project_path(str(source[2]), base_folder)
+            target_path = resolve_project_path(str(target[2]), base_folder)
+            source_sheet = str(source[3]).strip()
+            target_sheet = str(target[3]).strip()
+            if not source_sheet or not target_sheet:
+                raise ValueError("工作表名称不能为空。")
+            source_cells = parse_cell_addresses(str(source[4]))
+            target_text = str(target[4]).strip()
+            target_cells = (
+                list(source_cells)
+                if target_text in ("同位置", "与读取单元格相同")
+                else parse_cell_addresses(target_text)
+            )
+            mode = infer_mapping_mode(source_cells, target_cells)
+        except ValueError as exc:
+            raise ValueError(
+                f"映射组 {group}（第 {source_row}/{target_row} 行）：{exc}"
+            ) from exc
+        rules.append(
+            MappingRule(
+                str(source_path),
+                source_sheet,
+                source_cells,
+                str(target_path),
+                target_sheet,
+                target_cells,
+                mode,
+            )
+        )
+        if source_path not in sources:
+            sources.append(source_path)
+        if target_path not in targets:
+            targets.append(target_path)
+    if not rules:
+        raise ValueError("Excel 方案中没有可用的映射关系。")
+    return sources, targets, rules
 
 
 def parse_mapping_project_text(
@@ -584,8 +748,10 @@ def resolve_project_path(text: str, base_folder: Path) -> Path:
     return path if path.is_absolute() else (base_folder / path).resolve()
 
 
-def format_project_path(path: Path, base_folder: Path) -> str:
+def format_project_path(path: Path, base_folder: Path | None) -> str:
     path = path.resolve()
+    if base_folder is None:
+        return str(path)
     base_folder = base_folder.resolve()
     if path.parent == base_folder:
         return path.name
@@ -1365,14 +1531,13 @@ class MapperApp:
         self.source_files: list[Path] = []
         self.target_files: list[Path] = []
         self.rules: list[MappingRule] = []
+        self.scheme_rules: list[MappingRule] = []
         self.output_folder = StringVar()
         self.status = StringVar(value="请添加来源工作簿和目标工作簿。")
         self.progress_text = StringVar(value="0%")
-        self.txt_base_folder = StringVar()
-        self.txt_status = StringVar(value="尚未生成或导入 TXT 方案。")
+        self.scheme_base_folder = StringVar()
+        self.scheme_status = StringVar(value="尚未导入或生成 Excel 方案。")
         self._active_workflow_tab = 0
-        self._updating_txt_editor = False
-        self._txt_dirty = False
         self._configure_styles()
         self._build_ui()
 
@@ -1431,13 +1596,13 @@ class MapperApp:
             style="ActiveNav.TButton",
         )
         self.manual_nav_button.pack(side=LEFT)
-        self.txt_nav_button = ttk.Button(
+        self.scheme_nav_button = ttk.Button(
             navigation,
-            text="TXT 方案",
+            text="Excel 方案",
             command=lambda: self._show_workflow_page(1),
             style="Nav.TButton",
         )
-        self.txt_nav_button.pack(side=LEFT, padx=(6, 0))
+        self.scheme_nav_button.pack(side=LEFT, padx=(6, 0))
         self.clear_all_button = ttk.Button(
             navigation,
             text="清空所有内容",
@@ -1449,12 +1614,12 @@ class MapperApp:
         page_host = ttk.Frame(content)
         page_host.pack(fill=BOTH, expand=True)
         self.manual_tab = ttk.Frame(page_host, padding=10)
-        self.txt_tab = ttk.Frame(page_host, padding=12)
-        for page in (self.manual_tab, self.txt_tab):
+        self.scheme_tab = ttk.Frame(page_host, padding=12)
+        for page in (self.manual_tab, self.scheme_tab):
             page.place(x=0, y=0, relwidth=1, relheight=1)
         self.manual_tab.tkraise()
         manual_tab = self.manual_tab
-        txt_tab = self.txt_tab
+        scheme_tab = self.scheme_tab
 
         self.manual_panes = ttk.Panedwindow(manual_tab, orient="vertical")
         self.manual_panes.pack(fill=BOTH, expand=True)
@@ -1557,8 +1722,8 @@ class MapperApp:
             ).pack(side=LEFT, padx=(0, 6))
         ttk.Button(
             self.mapping_actions,
-            text="转换为 TXT →",
-            command=self._convert_manual_to_txt,
+            text="转换为 Excel 方案 →",
+            command=self._convert_manual_to_scheme,
             style="Primary.TButton",
         ).pack(side=RIGHT)
         ttk.Button(
@@ -1571,7 +1736,7 @@ class MapperApp:
             text="展开预览",
             command=self._preview_expanded,
         ).pack(side=RIGHT, padx=(0, 6))
-        plan_actions = ttk.Frame(txt_tab)
+        plan_actions = ttk.Frame(scheme_tab)
         plan_actions.pack(fill=X, pady=(0, 10))
         ttk.Label(
             plan_actions,
@@ -1579,8 +1744,9 @@ class MapperApp:
             style="Section.TLabel",
         ).pack(side=LEFT, padx=(0, 8))
         for text, command in (
-            ("导入 TXT 方案", self._load_project),
-            ("保存 TXT 方案", self._save_project),
+            ("导入 Excel 方案", self._load_excel_scheme),
+            ("导出 Excel 方案", self._save_excel_scheme),
+            ("生成空白模板", self._save_excel_template),
         ):
             ttk.Button(
                 plan_actions,
@@ -1591,12 +1757,12 @@ class MapperApp:
         ttk.Button(
             plan_actions,
             text="转换为手动设置 →",
-            command=self._convert_txt_to_manual,
+            command=self._convert_scheme_to_manual,
             style="Primary.TButton",
         ).pack(side=RIGHT)
 
         base_group = ttk.LabelFrame(
-            txt_tab,
+            scheme_tab,
             text="路径设置",
             padding=8,
         )
@@ -1606,95 +1772,62 @@ class MapperApp:
         ttk.Label(base_row, text="方案基准文件夹：").pack(side=LEFT)
         ttk.Entry(
             base_row,
-            textvariable=self.txt_base_folder,
+            textvariable=self.scheme_base_folder,
+            state="readonly",
         ).pack(side=LEFT, fill=X, expand=True)
-        ttk.Button(
-            base_row,
-            text="选择文件夹…",
-            command=self._browse_txt_base,
-        ).pack(side=LEFT, padx=(8, 0))
 
-        content_panes = ttk.Panedwindow(txt_tab, orient="horizontal")
-        content_panes.pack(fill=BOTH, expand=True)
-
-        editor_group = ttk.LabelFrame(
-            content_panes,
-            text="方案内容",
+        scheme_group = ttk.LabelFrame(
+            scheme_tab,
+            text="方案预览（每个映射组包含一行来源和一行目标）",
             padding=8,
         )
-        example_group = ttk.LabelFrame(
-            content_panes,
-            text="格式示例与填写说明",
-            padding=8,
+        scheme_group.pack(fill=BOTH, expand=True)
+        scheme_table = ttk.Frame(scheme_group)
+        scheme_table.pack(fill=BOTH, expand=True)
+        scheme_table.rowconfigure(0, weight=1)
+        scheme_table.columnconfigure(0, weight=1)
+        self.scheme_tree = ttk.Treeview(
+            scheme_table,
+            columns=("group", "kind", "workbook", "sheet", "cells"),
+            show="headings",
         )
-        content_panes.add(editor_group, weight=3)
-        content_panes.add(example_group, weight=2)
-
-        txt_editor_frame = ttk.Frame(editor_group)
-        txt_editor_frame.pack(fill=BOTH, expand=True, pady=(3, 0))
-        self.txt_editor = Text(
-            txt_editor_frame,
-            wrap="none",
-            font=("TkFixedFont", 10),
-            undo=True,
-            width=72,
-        )
-        self.txt_editor.pack(side=LEFT, fill=BOTH, expand=True)
-        txt_vertical = ttk.Scrollbar(
-            txt_editor_frame,
+        for column, title, width in (
+            ("group", "映射组", 75),
+            ("kind", "类型", 75),
+            ("workbook", "工作簿", 360),
+            ("sheet", "工作表", 180),
+            ("cells", "单元格", 220),
+        ):
+            self.scheme_tree.heading(column, text=title, anchor=W)
+            self.scheme_tree.column(
+                column,
+                width=width,
+                minwidth=60,
+                anchor=W,
+                stretch=column in ("workbook", "sheet", "cells"),
+            )
+        self.scheme_tree.tag_configure("source", background="#DDEBF7")
+        self.scheme_tree.tag_configure("target", background="#E2F0D9")
+        self.scheme_tree.grid(row=0, column=0, sticky="nsew")
+        scheme_vertical = ttk.Scrollbar(
+            scheme_table,
             orient="vertical",
-            command=self.txt_editor.yview,
+            command=self.scheme_tree.yview,
         )
-        txt_vertical.pack(side=RIGHT, fill="y")
-        txt_horizontal = ttk.Scrollbar(
-            editor_group,
+        scheme_vertical.grid(row=0, column=1, sticky="ns")
+        scheme_horizontal = ttk.Scrollbar(
+            scheme_table,
             orient="horizontal",
-            command=self.txt_editor.xview,
+            command=self.scheme_tree.xview,
         )
-        txt_horizontal.pack(fill=X)
-        self.txt_editor.configure(
-            yscrollcommand=txt_vertical.set,
-            xscrollcommand=txt_horizontal.set,
+        scheme_horizontal.grid(row=1, column=0, sticky="ew")
+        self.scheme_tree.configure(
+            yscrollcommand=scheme_vertical.set,
+            xscrollcommand=scheme_horizontal.set,
         )
-        self.txt_editor.bind("<<Modified>>", self._txt_editor_modified)
-
-        example_header = ttk.Frame(example_group)
-        example_header.pack(fill=X, pady=(0, 5))
         ttk.Label(
-            example_header,
-            text="可直接复制后修改：",
-            style="Muted.TLabel",
-        ).pack(side=LEFT)
-        ttk.Button(
-            example_header,
-            text="复制示例",
-            command=self._copy_txt_example,
-        ).pack(side=RIGHT)
-        self.txt_example_view = Text(
-            example_group,
-            wrap="char",
-            font=("TkFixedFont", 9),
-            height=8,
-            width=42,
-        )
-        self.txt_example_view.insert("1.0", TXT_EXAMPLE)
-        self.txt_example_view.configure(state="disabled")
-        self.txt_example_view.pack(fill=X)
-        ttk.Separator(example_group).pack(fill=X, pady=8)
-        instructions = Text(
-            example_group,
-            wrap="word",
-            font=("TkDefaultFont", 9),
-            height=8,
-            width=42,
-        )
-        instructions.insert("1.0", TXT_INSTRUCTIONS)
-        instructions.configure(state="disabled")
-        instructions.pack(fill=BOTH, expand=True)
-
-        ttk.Label(
-            txt_tab,
-            textvariable=self.txt_status,
+            scheme_tab,
+            textvariable=self.scheme_status,
             style="Muted.TLabel",
         ).pack(anchor=W, pady=(8, 0))
 
@@ -2012,22 +2145,18 @@ class MapperApp:
             self._refresh_rules()
 
     def _clear_all_workflow(self) -> None:
-        has_txt_content = (
-            hasattr(self, "txt_editor")
-            and bool(self.txt_editor.get("1.0", END).strip())
-        )
         if not (
             self.source_files
             or self.target_files
             or self.rules
-            or has_txt_content
-            or self.txt_base_folder.get().strip()
+            or self.scheme_rules
+            or self.scheme_base_folder.get().strip()
         ):
             self.status.set("当前方案中没有需要清空的内容。")
             return
         if not messagebox.askyesno(
             "清空所有内容",
-            "确定清空手动设置和 TXT 方案中的全部内容吗？",
+            "确定清空手动设置和 Excel 方案中的全部内容吗？",
             parent=self.root,
         ):
             return
@@ -2037,11 +2166,11 @@ class MapperApp:
         self._refresh_file_tree(self.source_tree, self.source_files)
         self._refresh_file_tree(self.target_tree, self.target_files)
         self._refresh_rules()
-        self._set_txt_text("")
-        self.txt_base_folder.set("")
-        self._txt_dirty = False
-        self.txt_status.set("TXT 方案内容已清空。")
-        self.status.set("已清空手动设置和 TXT 方案中的全部内容。")
+        self.scheme_rules.clear()
+        self.scheme_base_folder.set("")
+        self._refresh_scheme_tree()
+        self.scheme_status.set("Excel 方案内容已清空。")
+        self.status.set("已清空手动设置和 Excel 方案中的全部内容。")
 
     def _refresh_rules(self) -> None:
         self.mapping_tree.delete(*self.mapping_tree.get_children())
@@ -2115,41 +2244,8 @@ class MapperApp:
         if selected:
             self.output_folder.set(selected)
 
-    def _copy_txt_example(self) -> None:
-        self.root.clipboard_clear()
-        self.root.clipboard_append(TXT_EXAMPLE)
-        self.status.set("TXT 格式示例已复制到剪贴板。")
-
-    def _browse_txt_base(self) -> None:
-        selected = filedialog.askdirectory(title="选择方案基准文件夹")
-        if not selected:
-            return
-        self.txt_base_folder.set(selected)
-        if not self.output_folder.get().strip():
-            self.output_folder.set(str(Path(selected) / "映射结果"))
-        self._txt_dirty = True
-        self.txt_status.set("基准文件夹已更改，切换页签时将自动检查。")
-
-    def _txt_editor_modified(self, _event=None) -> None:
-        if self._updating_txt_editor:
-            self.txt_editor.edit_modified(False)
-            return
-        if self.txt_editor.edit_modified():
-            self._txt_dirty = True
-            self.txt_status.set("TXT 内容已修改，切换页签时将自动检查。")
-            self.txt_editor.edit_modified(False)
-
-    def _set_txt_text(self, text: str) -> None:
-        self._updating_txt_editor = True
-        try:
-            self.txt_editor.delete("1.0", END)
-            self.txt_editor.insert("1.0", text)
-            self.txt_editor.edit_modified(False)
-        finally:
-            self._updating_txt_editor = False
-
-    def _default_txt_base_folder(self) -> Path | None:
-        configured = self.txt_base_folder.get().strip()
+    def _default_scheme_base_folder(self) -> Path | None:
+        configured = self.scheme_base_folder.get().strip()
         if configured:
             return Path(configured).resolve()
         files = self.source_files + self.target_files
@@ -2157,210 +2253,168 @@ class MapperApp:
             return files[0].parent.resolve()
         return None
 
-    def _sync_manual_to_txt(self) -> None:
-        base_folder = self._default_txt_base_folder()
-        if base_folder is None:
-            self._set_txt_text("")
-            self.txt_status.set("请先在“手动设置”中添加工作簿和映射关系。")
-            self._txt_dirty = False
-            return
-        self.txt_base_folder.set(str(base_folder))
-        self._set_txt_text(serialize_mapping_project(self.rules, base_folder))
-        self._txt_dirty = False
-        if self.rules:
-            self.txt_status.set(
-                f"已从手动设置自动生成，共 {len(self.rules)} 条映射。"
-            )
-        else:
-            self.txt_status.set("尚无映射关系，TXT 内容为空。")
-
     def _show_workflow_page(self, index: int) -> None:
         self._active_workflow_tab = index
         if index == 0:
             self.manual_tab.tkraise()
             self.manual_nav_button.configure(style="ActiveNav.TButton")
-            self.txt_nav_button.configure(style="Nav.TButton")
+            self.scheme_nav_button.configure(style="Nav.TButton")
         else:
-            self.txt_tab.tkraise()
+            self.scheme_tab.tkraise()
             self.manual_nav_button.configure(style="Nav.TButton")
-            self.txt_nav_button.configure(style="ActiveNav.TButton")
+            self.scheme_nav_button.configure(style="ActiveNav.TButton")
 
-    def _convert_manual_to_txt(self) -> None:
-        self._sync_manual_to_txt()
+    def _convert_manual_to_scheme(self) -> None:
+        if not self.rules:
+            messagebox.showinfo(
+                "没有映射",
+                "请先在“手动设置”中添加映射关系。",
+                parent=self.root,
+            )
+            return
+        base_folder = self._default_scheme_base_folder()
+        if base_folder is None:
+            base_folder = Path.cwd()
+        self.scheme_rules = [
+            MappingRule(**asdict(rule)) for rule in self.rules
+        ]
+        self.scheme_base_folder.set(str(base_folder))
+        self._refresh_scheme_tree()
+        self.scheme_status.set(
+            f"已从手动设置生成预览，共 {len(self.scheme_rules)} 组映射；"
+            "可点击“导出 Excel 方案”保存。"
+        )
         self._show_workflow_page(1)
 
-    def _convert_txt_to_manual(self) -> None:
-        if self._apply_txt_to_manual(
-            show_message=True,
-            check_workbooks=False,
-        ):
-            self._show_workflow_page(0)
-
-    def _apply_txt_to_manual(
-        self,
-        show_message: bool = True,
-        check_workbooks: bool = True,
-    ) -> bool:
-        plan_text = self.txt_editor.get("1.0", END).strip()
-        if not plan_text:
-            self._txt_dirty = False
-            self.txt_status.set("TXT 内容为空，未更改手动设置。")
-            return True
-        base_text = self.txt_base_folder.get().strip()
-        if not base_text:
-            message = "请先选择方案基准文件夹。"
-            self.txt_status.set(message)
-            if show_message:
-                messagebox.showerror("TXT 方案无法应用", message, parent=self.root)
-            return False
-        try:
-            sources, targets, rules = parse_mapping_project_text(
-                plan_text,
-                Path(base_text).resolve(),
+    def _convert_scheme_to_manual(self) -> None:
+        if not self.scheme_rules:
+            messagebox.showinfo(
+                "没有映射",
+                "请先导入 Excel 方案，或从手动设置生成方案。",
+                parent=self.root,
             )
-            warnings: list[str] = []
-            if check_workbooks:
-                _expanded, warnings = validate_mapping_plan(
-                    sources,
-                    targets,
-                    rules,
-                )
-        except Exception as exc:
-            message = str(exc)
-            self.txt_status.set(f"检查失败：{message}")
-            if show_message:
-                messagebox.showerror(
-                    "TXT 方案无法应用",
-                    message,
-                    parent=self.root,
-                )
-            return False
-
-        self.source_files = sources
-        self.target_files = targets
-        self.rules = rules
-        self.output_folder.set(str(Path(base_text).resolve() / "映射结果"))
+            return
+        self.rules = [
+            MappingRule(**asdict(rule)) for rule in self.scheme_rules
+        ]
+        self.source_files = list(
+            dict.fromkeys(Path(rule.source_file) for rule in self.rules)
+        )
+        self.target_files = list(
+            dict.fromkeys(Path(rule.target_file) for rule in self.rules)
+        )
+        base_folder = self._default_scheme_base_folder() or Path.cwd()
+        if not self.output_folder.get().strip():
+            self.output_folder.set(str(base_folder / "映射结果"))
         self._refresh_file_tree(self.source_tree, self.source_files)
         self._refresh_file_tree(self.target_tree, self.target_files)
         self._refresh_rules()
-        self._txt_dirty = False
-        suffix = f"，发现 {len(warnings)} 个目标单元格已有内容" if warnings else ""
-        self.txt_status.set(f"TXT 方案已同步，共 {len(rules)} 条映射{suffix}。")
-        return True
+        self.status.set(f"已应用 Excel 方案，共 {len(self.rules)} 组映射。")
+        self._show_workflow_page(0)
 
-    def _clear_txt_content(self) -> None:
-        if self.txt_editor.get("1.0", END).strip() and not messagebox.askyesno(
-            "清空 TXT 内容",
-            "确定清空当前 TXT 方案内容吗？",
-            parent=self.root,
-        ):
+    def _refresh_scheme_tree(self) -> None:
+        if not hasattr(self, "scheme_tree"):
             return
-        self._set_txt_text("")
-        self._txt_dirty = True
-        self.txt_status.set("TXT 内容已清空，尚未同步到手动设置。")
+        self.scheme_tree.delete(*self.scheme_tree.get_children())
+        base = self._default_scheme_base_folder()
+        for group, rule in enumerate(self.scheme_rules, start=1):
+            source_file = format_project_path(Path(rule.source_file), base)
+            target_file = format_project_path(Path(rule.target_file), base)
+            self.scheme_tree.insert(
+                "",
+                END,
+                values=(
+                    group,
+                    "来源",
+                    source_file,
+                    rule.source_sheet,
+                    format_cell_addresses(rule.source_cells),
+                ),
+                tags=("source",),
+            )
+            target_cells = (
+                "同位置"
+                if rule.target_cells == rule.source_cells
+                else format_cell_addresses(rule.target_cells)
+            )
+            self.scheme_tree.insert(
+                "",
+                END,
+                values=(
+                    group,
+                    "目标",
+                    target_file,
+                    rule.target_sheet,
+                    target_cells,
+                ),
+                tags=("target",),
+            )
 
-    def _show_txt_example(self) -> None:
-        window = Toplevel(self.root)
-        window.title("TXT 映射方案格式示例")
-        window.geometry("820x540")
-        window.minsize(680, 430)
-        window.transient(self.root)
-        container = ttk.Frame(window, padding=12)
-        container.pack(fill=BOTH, expand=True)
-        ttk.Label(container, text="示例文件内容：").pack(anchor=W)
-        example = Text(
-            container,
-            wrap="none",
-            font=("TkFixedFont", 10),
-            height=7,
-        )
-        example.insert("1.0", TXT_EXAMPLE)
-        example.configure(state="disabled")
-        example.pack(fill=BOTH, expand=True, pady=(3, 10))
-        ttk.Label(container, text="填写说明：").pack(anchor=W)
-        instructions = Text(
-            container,
-            wrap="word",
-            font=("TkDefaultFont", 10),
-            height=10,
-        )
-        instructions.insert("1.0", TXT_INSTRUCTIONS)
-        instructions.configure(state="disabled")
-        instructions.pack(fill=BOTH, expand=True, pady=(3, 0))
-        actions = ttk.Frame(container)
-        actions.pack(fill=X, pady=(8, 0))
-
-        ttk.Button(
-            actions,
-            text="复制示例",
-            command=self._copy_txt_example,
-        ).pack(side=LEFT)
-        ttk.Button(
-            actions,
-            text="关闭",
-            command=window.destroy,
-        ).pack(side=LEFT, padx=(8, 0))
-
-    def _save_project(self) -> None:
-        plan_text = self.txt_editor.get("1.0", END).strip()
-        if not plan_text:
+    def _save_excel_scheme(self) -> None:
+        if not self.scheme_rules:
             messagebox.showerror(
                 "方案内容为空",
-                "请先填写或导入 TXT 方案内容。",
+                "请先导入方案，或从手动设置生成 Excel 方案。",
                 parent=self.root,
             )
             return
         selected = filedialog.asksaveasfilename(
-            title="保存 TXT 映射方案",
-            defaultextension=".txt",
-            filetypes=[("TXT 映射方案", "*.txt"), ("所有文件", "*.*")],
+            title="导出 Excel 映射方案",
+            defaultextension=".xlsx",
+            filetypes=[("Excel 映射方案", "*.xlsx")],
         )
         if selected:
             path = Path(selected)
             try:
-                current_base = (
-                    Path(self.txt_base_folder.get()).resolve()
-                    if self.txt_base_folder.get().strip()
-                    else path.parent.resolve()
-                )
-                _sources, _targets, rules = parse_mapping_project_text(
-                    plan_text,
-                    current_base,
-                )
-                saved_text = serialize_mapping_project(
-                    rules,
+                save_excel_mapping_scheme(
+                    path,
+                    self.scheme_rules,
                     path.parent.resolve(),
                 )
-                path.write_text(saved_text, encoding="utf-8-sig")
-                self.txt_base_folder.set(str(path.parent.resolve()))
-                self._set_txt_text(saved_text)
-                self._txt_dirty = False
-                self.txt_status.set(f"TXT 方案已保存：{path.name}")
+                self.scheme_base_folder.set(str(path.parent.resolve()))
+                self.scheme_status.set(f"Excel 方案已导出：{path.name}")
+                self._refresh_scheme_tree()
             except Exception as exc:
-                messagebox.showerror(
-                    "保存失败",
-                    str(exc),
-                    parent=self.root,
-                )
+                messagebox.showerror("导出失败", str(exc), parent=self.root)
 
-    def _load_project(self) -> None:
+    def _load_excel_scheme(self) -> None:
         selected = filedialog.askopenfilename(
-            title="导入 TXT 映射方案",
-            filetypes=[("TXT 映射方案", "*.txt"), ("所有文件", "*.*")],
+            title="导入 Excel 映射方案",
+            filetypes=[("Excel 映射方案", "*.xlsx *.xlsm")],
         )
         if not selected:
             return
         try:
             path = Path(selected)
-            self.txt_base_folder.set(str(path.parent.resolve()))
-            self._set_txt_text(path.read_text(encoding="utf-8-sig"))
-            self._txt_dirty = False
-            self.txt_status.set(
-                f"已导入 {path.name}；需要时请点击“转换为手动设置”。"
+            _sources, _targets, self.scheme_rules = (
+                load_excel_mapping_scheme(path)
+            )
+            self.scheme_base_folder.set(str(path.parent.resolve()))
+            self._refresh_scheme_tree()
+            if not self.output_folder.get().strip():
+                self.output_folder.set(str(path.parent.resolve() / "映射结果"))
+            self.scheme_status.set(
+                f"已导入 {path.name}，共 {len(self.scheme_rules)} 组映射；"
+                "需要时可转换为手动设置。"
             )
         except Exception as exc:
-            self.txt_status.set(f"导入失败：{exc}")
+            self.scheme_status.set(f"导入失败：{exc}")
             messagebox.showerror("导入失败", str(exc), parent=self.root)
+
+    def _save_excel_template(self) -> None:
+        selected = filedialog.asksaveasfilename(
+            title="生成空白 Excel 映射模板",
+            defaultextension=".xlsx",
+            filetypes=[("Excel 映射方案", "*.xlsx")],
+        )
+        if not selected:
+            return
+        try:
+            path = Path(selected)
+            save_blank_excel_mapping_template(path)
+            self.scheme_status.set(f"空白模板已生成：{path.name}")
+        except Exception as exc:
+            messagebox.showerror("生成失败", str(exc), parent=self.root)
 
     @staticmethod
     def _refresh_file_tree(tree, files: list[Path]) -> None:
@@ -2386,15 +2440,16 @@ class MapperApp:
 
     def _precheck(self) -> bool:
         try:
+            source_files, target_files, rules = self._active_plan()
             expanded, warnings = validate_mapping_plan(
-                self.source_files,
-                self.target_files,
-                self.rules,
+                source_files,
+                target_files,
+                rules,
             )
             message = (
-                f"来源工作簿：{len(self.source_files)} 个\n"
-                f"目标工作簿：{len(self.target_files)} 个\n"
-                f"映射规则：{len(self.rules)} 条\n"
+                f"来源工作簿：{len(source_files)} 个\n"
+                f"目标工作簿：{len(target_files)} 个\n"
+                f"映射规则：{len(rules)} 条\n"
                 f"展开后写入：{len(expanded)} 项"
             )
             if warnings:
@@ -2412,6 +2467,19 @@ class MapperApp:
             messagebox.showerror("预检查失败", str(exc), parent=self.root)
             return False
 
+    def _active_plan(self) -> tuple[list[Path], list[Path], list[MappingRule]]:
+        if self._active_workflow_tab == 0:
+            return self.source_files, self.target_files, self.rules
+        if not self.scheme_rules:
+            raise ValueError("请先导入 Excel 方案，或从手动设置生成方案。")
+        sources = list(
+            dict.fromkeys(Path(rule.source_file) for rule in self.scheme_rules)
+        )
+        targets = list(
+            dict.fromkeys(Path(rule.target_file) for rule in self.scheme_rules)
+        )
+        return sources, targets, self.scheme_rules
+
     def _progress(self, current: int, total: int, message: str) -> None:
         maximum = max(total, 1)
         self.progress.configure(maximum=maximum, value=current)
@@ -2428,17 +2496,7 @@ class MapperApp:
             )
             return
         try:
-            source_files = self.source_files
-            target_files = self.target_files
-            rules = self.rules
-            if self._active_workflow_tab == 1:
-                base_text = self.txt_base_folder.get().strip()
-                if not base_text:
-                    raise ValueError("请先选择方案基准文件夹。")
-                source_files, target_files, rules = parse_mapping_project_text(
-                    self.txt_editor.get("1.0", END),
-                    Path(base_text).resolve(),
-                )
+            source_files, target_files, rules = self._active_plan()
             expanded, warnings = validate_mapping_plan(
                 source_files,
                 target_files,
