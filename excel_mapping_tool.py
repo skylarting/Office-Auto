@@ -33,7 +33,7 @@ class ExcelMappingToolApp(MapperApp):
         )
         style.map(
             "Mapping.Treeview",
-            background=[("selected", "#D9EAF7")],
+            background=[("selected", "#E4DED3")],
             foreground=[("selected", "#111111")],
         )
         style.configure(
@@ -135,8 +135,8 @@ class ExcelMappingToolApp(MapperApp):
                 anchor=W,
                 stretch=stretch,
             )
-        self.scheme_tree.tag_configure("source", background="#EAF3FB")
-        self.scheme_tree.tag_configure("target", background="#EDF7ED")
+        self.scheme_tree.tag_configure("source", background="#FBFAF7")
+        self.scheme_tree.tag_configure("target", background="#F2F0EB")
         self.scheme_tree.grid(row=0, column=0, sticky="nsew")
         vertical = ttk.Scrollbar(
             table_surface,
