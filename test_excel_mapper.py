@@ -345,6 +345,16 @@ class ExcelMapperTests(unittest.TestCase):
             excel_mapper.format_cell_addresses(["A1", "C3"]),
             "A1,C3",
         )
+        self.assertEqual(
+            excel_mapper.format_cell_addresses(
+                [
+                    "A1", "A2", "A3",
+                    "B1", "B2", "B3",
+                    "D1", "D2", "D3",
+                ]
+            ),
+            "A1-B3,D1-D3",
+        )
 
     def test_best_name_match_prefers_same_or_common_prefix(self) -> None:
         self.assertEqual(
