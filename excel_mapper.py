@@ -1378,6 +1378,20 @@ class MapperApp:
             self._workflow_tab_changed,
         )
 
+        manual_toolbar = ttk.Frame(manual_tab)
+        manual_toolbar.pack(fill=X, pady=(0, 8))
+        ttk.Label(
+            manual_toolbar,
+            text="工作簿与映射设置",
+            style="Section.TLabel",
+        ).pack(side=LEFT)
+        ttk.Button(
+            manual_toolbar,
+            text="清空所有内容",
+            command=self._clear_manual_all,
+            style="Toolbar.TButton",
+        ).pack(side=RIGHT)
+
         self.manual_panes = ttk.Panedwindow(manual_tab, orient="vertical")
         self.manual_panes.pack(fill=BOTH, expand=True)
 
@@ -1904,6 +1918,25 @@ class MapperApp:
         ):
             self.rules.clear()
             self._refresh_rules()
+
+    def _clear_manual_all(self) -> None:
+        if not (self.source_files or self.target_files or self.rules):
+            self.status.set("手动设置中没有需要清空的内容。")
+            return
+        if not messagebox.askyesno(
+            "清空手动设置",
+            "确定清空全部来源工作簿、目标工作簿和映射关系吗？",
+            parent=self.root,
+        ):
+            return
+        self.source_files.clear()
+        self.target_files.clear()
+        self.rules.clear()
+        self._refresh_file_tree(self.source_tree, self.source_files)
+        self._refresh_file_tree(self.target_tree, self.target_files)
+        self._refresh_rules()
+        self._txt_dirty = False
+        self.status.set("已清空手动设置中的全部内容。")
 
     def _refresh_rules(self) -> None:
         self.mapping_tree.delete(*self.mapping_tree.get_children())
