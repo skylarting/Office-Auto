@@ -1804,6 +1804,11 @@ class MapperApp:
         return None
 
     def _sync_manual_to_txt(self) -> None:
+        if self._txt_dirty:
+            self.txt_status.set(
+                "已保留尚未同步的 TXT 内容；执行时再进行完整检查。"
+            )
+            return
         base_folder = self._default_txt_base_folder()
         if base_folder is None:
             self._set_txt_text("")
@@ -1820,7 +1825,11 @@ class MapperApp:
         else:
             self.txt_status.set("尚无映射关系，TXT 内容为空。")
 
-    def _apply_txt_to_manual(self, show_message: bool = True) -> bool:
+    def _apply_txt_to_manual(
+        self,
+        show_message: bool = True,
+        check_workbooks: bool = True,
+    ) -> bool:
         plan_text = self.txt_editor.get("1.0", END).strip()
         if not plan_text:
             self._txt_dirty = False
@@ -1838,11 +1847,13 @@ class MapperApp:
                 plan_text,
                 Path(base_text).resolve(),
             )
-            _expanded, warnings = validate_mapping_plan(
-                sources,
-                targets,
-                rules,
-            )
+            warnings: list[str] = []
+            if check_workbooks:
+                _expanded, warnings = validate_mapping_plan(
+                    sources,
+                    targets,
+                    rules,
+                )
         except Exception as exc:
             message = str(exc)
             self.txt_status.set(f"检查失败：{message}")
@@ -1881,15 +1892,11 @@ class MapperApp:
             self._sync_manual_to_txt()
             self._active_workflow_tab = 1
             return
-        if self._apply_txt_to_manual():
-            self._active_workflow_tab = 0
-            return
-        self._switching_workflow_tab = True
-        try:
-            self.workflow_notebook.select(1)
-            self._active_workflow_tab = 1
-        finally:
-            self._switching_workflow_tab = False
+        self._apply_txt_to_manual(
+            show_message=False,
+            check_workbooks=False,
+        )
+        self._active_workflow_tab = 0
 
     def _clear_txt_content(self) -> None:
         if self.txt_editor.get("1.0", END).strip() and not messagebox.askyesno(
