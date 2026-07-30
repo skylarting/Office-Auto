@@ -1,6 +1,17 @@
 """Single-page Excel mapping table application."""
 
-from tkinter import BOTH, LEFT, RIGHT, W, X, Menu, Tk, messagebox, ttk
+from tkinter import (
+    BOTH,
+    LEFT,
+    RIGHT,
+    W,
+    X,
+    Menu,
+    StringVar,
+    Tk,
+    messagebox,
+    ttk,
+)
 
 from excel_mapper import MapperApp
 
@@ -72,9 +83,19 @@ class ExcelMappingToolApp(MapperApp):
         default_row = ttk.Frame(container)
         default_row.pack(fill=X, pady=(0, 12))
         ttk.Label(default_row, text="默认文件夹：").pack(side=LEFT)
+        self.default_folder_display = StringVar(
+            value="点击此处选择默认文件夹"
+        )
+        self.scheme_base_folder.trace_add(
+            "write",
+            lambda *_args: self.default_folder_display.set(
+                self.scheme_base_folder.get().strip()
+                or "点击此处选择默认文件夹"
+            ),
+        )
         self.scheme_base_entry = ttk.Entry(
             default_row,
-            textvariable=self.scheme_base_folder,
+            textvariable=self.default_folder_display,
             state="readonly",
             cursor="hand2",
         )
@@ -169,8 +190,8 @@ class ExcelMappingToolApp(MapperApp):
         ttk.Label(
             container,
             text=(
-                "填写底部空白组即可新增；单击选择，双击工作簿浏览文件，"
-                "双击工作表或单元格可输入；Delete/右键管理整组。"
+                "单击选择工作簿、工作表或单元格；双击工作簿可浏览其他文件，"
+                "双击工作表或单元格可手动输入；Delete 或右键管理整组。"
             ),
             style="Status.TLabel",
         ).pack(anchor=W, pady=(8, 4))
@@ -185,9 +206,19 @@ class ExcelMappingToolApp(MapperApp):
         output_row = ttk.Frame(container)
         output_row.pack(fill=X)
         ttk.Label(output_row, text="输出文件夹：").pack(side=LEFT)
+        self.output_folder_display = StringVar(
+            value="点击此处选择输出文件夹"
+        )
+        self.output_folder.trace_add(
+            "write",
+            lambda *_args: self.output_folder_display.set(
+                self.output_folder.get().strip()
+                or "点击此处选择输出文件夹"
+            ),
+        )
         self.output_entry = ttk.Entry(
             output_row,
-            textvariable=self.output_folder,
+            textvariable=self.output_folder_display,
             state="readonly",
             cursor="hand2",
         )
