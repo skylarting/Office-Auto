@@ -26,6 +26,7 @@ from typing import Callable
 
 import xlrd
 from openpyxl import load_workbook
+from openpyxl.styles.colors import COLOR_INDEX
 
 from export_summary import (
     WORKBOOK_SUFFIXES,
@@ -189,6 +190,21 @@ def expand_rules(rules: list[MappingRule]) -> list[ExpandedMapping]:
 
 
 class WorkbookReader:
+    DEFAULT_THEME_COLORS = (
+        "FFFFFF",
+        "000000",
+        "EEECE1",
+        "1F497D",
+        "4F81BD",
+        "C0504D",
+        "9BBB59",
+        "8064A2",
+        "4BACC6",
+        "F79646",
+        "0000FF",
+        "800080",
+    )
+
     def __init__(self, path: Path) -> None:
         self.path = path
         self.is_xls = path.suffix.lower() == ".xls"
@@ -236,6 +252,61 @@ class WorkbookReader:
             self.value_book[sheet_name][address].value,
             self.format_book[sheet_name][address].number_format,
         )
+
+    @staticmethod
+    def _apply_tint(rgb: str, tint: float) -> str:
+        channels = [int(rgb[index:index + 2], 16) for index in (0, 2, 4)]
+        adjusted: list[int] = []
+        for channel in channels:
+            value = (
+                channel * (1 + tint)
+                if tint < 0
+                else channel * (1 - tint) + 255 * tint
+            )
+            adjusted.append(max(0, min(255, round(value))))
+        return "".join(f"{value:02X}" for value in adjusted)
+
+    def fill_color(self, sheet_name: str, address: str) -> str | None:
+        if self.is_xls:
+            sheet = self.xls_book.sheet_by_name(sheet_name)
+            row, column = split_address(address)
+            if row >= sheet.nrows or column >= sheet.ncols:
+                return None
+            cell = sheet.cell(row, column)
+            xf = self.xls_book.xf_list[cell.xf_index]
+            background = xf.background
+            if not background.fill_pattern:
+                return None
+            rgb = self.xls_book.colour_map.get(
+                background.pattern_colour_index
+            )
+            return (
+                f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}"
+                if rgb is not None
+                else None
+            )
+
+        cell = self.format_book[sheet_name][address]
+        if not cell.fill.fill_type:
+            return None
+        color = cell.fill.fgColor
+        rgb: str | None = None
+        if color.type == "rgb" and color.rgb:
+            rgb = str(color.rgb)[-6:]
+        elif color.type == "indexed" and color.indexed is not None:
+            index = int(color.indexed)
+            if 0 <= index < len(COLOR_INDEX):
+                rgb = COLOR_INDEX[index][-6:]
+        elif color.type == "theme" and color.theme is not None:
+            index = int(color.theme)
+            if 0 <= index < len(self.DEFAULT_THEME_COLORS):
+                rgb = self.DEFAULT_THEME_COLORS[index]
+        if rgb is None or not re.fullmatch(r"[0-9A-Fa-f]{6}", rgb):
+            return None
+        tint = float(color.tint or 0)
+        if tint:
+            rgb = self._apply_tint(rgb, tint)
+        return f"#{rgb.upper()}"
 
     def close(self) -> None:
         if self.xls_book is not None:
@@ -597,6 +668,7 @@ class CellPickerDialog:
         self.sheet_name = sheet_name
         self.selected = set(initial_cells)
         self.anchor: tuple[int, int] | None = None
+        self.cell_display_cache: dict[str, tuple[object, str | None]] = {}
         self.rows = max(
             50,
             max((cell_sort_key(item)[0] + 1 for item in initial_cells), default=0),
@@ -753,27 +825,45 @@ class CellPickerDialog:
         address = f"{column_number_to_letters(column + 1)}{row + 1}"
         x1 = column * self.COLUMN_WIDTH
         y1 = row * self.ROW_HEIGHT
-        fill = "#cfe8ff" if address in self.selected else "white"
+        if address not in self.cell_display_cache:
+            try:
+                value = self.reader.read(self.sheet_name, address).value
+                original_fill = self.reader.fill_color(
+                    self.sheet_name,
+                    address,
+                )
+            except Exception:
+                value = ""
+                original_fill = None
+            self.cell_display_cache[address] = (value, original_fill)
+        value, original_fill = self.cell_display_cache[address]
+        selected = address in self.selected
         self.grid_canvas.create_rectangle(
             x1,
             y1,
             x1 + self.COLUMN_WIDTH,
             y1 + self.ROW_HEIGHT,
-            fill=fill,
-            outline="#d6dce2",
+            fill=original_fill or "white",
+            outline="#1683e2" if selected else "#d6dce2",
+            width=3 if selected else 1,
             tags=(f"cell-{address}",),
         )
-        try:
-            value = self.reader.read(self.sheet_name, address).value
-        except Exception:
-            value = ""
         text = "" if value is None else str(value).replace("\n", " ")
         if len(text) > 14:
             text = text[:13] + "…"
+        text_color = "black"
+        if original_fill:
+            red, green, blue = (
+                int(original_fill[index:index + 2], 16)
+                for index in (1, 3, 5)
+            )
+            if red * 299 + green * 587 + blue * 114 < 128000:
+                text_color = "white"
         self.grid_canvas.create_text(
             x1 + 5,
             y1 + self.ROW_HEIGHT / 2,
             text=text,
+            fill=text_color,
             anchor=W,
             tags=(f"cell-{address}",),
         )
@@ -1288,8 +1378,11 @@ class MapperApp:
             self._workflow_tab_changed,
         )
 
-        file_row = ttk.Frame(manual_tab)
-        file_row.pack(fill=X)
+        self.manual_panes = ttk.Panedwindow(manual_tab, orient="vertical")
+        self.manual_panes.pack(fill=BOTH, expand=True)
+
+        file_row = ttk.Frame(self.manual_panes)
+        self.manual_panes.add(file_row, weight=1)
         file_row.columnconfigure(0, weight=1, uniform="files")
         file_row.columnconfigure(2, weight=1, uniform="files")
         self.source_tree = self._file_panel(
@@ -1322,20 +1415,23 @@ class MapperApp:
         )
 
         mapping_frame = ttk.LabelFrame(
-            manual_tab,
+            self.manual_panes,
             text="3. 映射关系",
             padding=10,
         )
-        mapping_frame.pack(fill=X, pady=(10, 0))
+        self.manual_panes.add(mapping_frame, weight=2)
+        mapping_frame.columnconfigure(0, weight=1)
+        mapping_frame.rowconfigure(0, weight=1)
 
         mapping_table = ttk.Frame(mapping_frame)
-        mapping_table.pack(fill=X)
+        mapping_table.grid(row=0, column=0, sticky="nsew")
         mapping_table.columnconfigure(0, weight=1)
+        mapping_table.rowconfigure(0, weight=1)
         self.mapping_tree = ttk.Treeview(
             mapping_table,
             columns=("source", "target"),
             show="headings",
-            height=10,
+            height=6,
         )
         self.mapping_tree.heading("source", text="来源位置")
         self.mapping_tree.heading("target", text="目标位置")
@@ -1362,8 +1458,13 @@ class MapperApp:
             "<Double-1>",
             lambda _event: self._edit_rule(),
         )
-        mapping_actions = ttk.Frame(mapping_frame)
-        mapping_actions.pack(fill=X, pady=(8, 0))
+        self.mapping_actions = ttk.Frame(mapping_frame)
+        self.mapping_actions.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            pady=(8, 0),
+        )
         for text, command in (
             ("添加映射", self._add_rule),
             ("编辑选中", self._edit_rule),
@@ -1372,17 +1473,17 @@ class MapperApp:
             ("清空映射", self._clear_rules),
         ):
             ttk.Button(
-                mapping_actions,
+                self.mapping_actions,
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
         ttk.Button(
-            mapping_actions,
+            self.mapping_actions,
             text="预检查",
             command=self._precheck,
         ).pack(side=RIGHT)
         ttk.Button(
-            mapping_actions,
+            self.mapping_actions,
             text="展开预览",
             command=self._preview_expanded,
         ).pack(side=RIGHT, padx=(0, 6))
