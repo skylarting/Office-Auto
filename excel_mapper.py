@@ -409,10 +409,24 @@ def excel_automation_available() -> bool:
     if sys.platform != "win32":
         return False
     try:
-        import win32com.client  # noqa: F401
+        import pythoncom
+        import win32com.client
     except ImportError:
         return False
-    return True
+    pythoncom.CoInitialize()
+    excel = None
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+        return True
+    except Exception:
+        return False
+    finally:
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
 
 
 def execute_mapping_plan_with_excel(
