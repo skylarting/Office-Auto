@@ -330,6 +330,22 @@ class ExcelMapperTests(unittest.TestCase):
                 ["B1", "B2", "B3"],
             )
 
+    def test_cell_addresses_are_compacted_for_display(self) -> None:
+        self.assertEqual(
+            excel_mapper.format_cell_addresses(
+                ["A1", "A2", "A3", "B1", "B2", "B3"]
+            ),
+            "A1-B3",
+        )
+        self.assertEqual(
+            excel_mapper.format_cell_addresses(["A1", "A2", "A3"]),
+            "A1-A3",
+        )
+        self.assertEqual(
+            excel_mapper.format_cell_addresses(["A1", "C3"]),
+            "A1,C3",
+        )
+
     def test_best_name_match_prefers_same_or_common_prefix(self) -> None:
         self.assertEqual(
             excel_mapper.best_name_match(
