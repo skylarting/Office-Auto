@@ -1220,7 +1220,7 @@ class MapperApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
         self.root.title("Excel 单元格映射工具")
-        self.root.geometry("1100x720")
+        self.root.geometry("1180x800")
         self.root.minsize(900, 600)
         self.source_files: list[Path] = []
         self.target_files: list[Path] = []
@@ -1234,7 +1234,39 @@ class MapperApp:
         self._switching_workflow_tab = False
         self._updating_txt_editor = False
         self._txt_dirty = False
+        self._configure_styles()
         self._build_ui()
+
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self.root)
+        style.configure("Toolbar.TButton", padding=(10, 4))
+        style.configure(
+            "Primary.TButton",
+            padding=(18, 7),
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        style.configure(
+            "TLabelframe.Label",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        style.configure("TNotebook.Tab", padding=(12, 5))
+        style.configure(
+            "Treeview",
+            rowheight=24,
+            font=("Microsoft YaHei UI", 9),
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=("Microsoft YaHei UI", 9, "bold"),
+        )
+        style.configure(
+            "Section.TLabel",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        style.configure(
+            "Muted.TLabel",
+            foreground="#5f6368",
+        )
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self.root, padding=16)
@@ -1346,7 +1378,42 @@ class MapperApp:
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
-        base_row = ttk.Frame(txt_tab)
+        plan_actions = ttk.Frame(txt_tab)
+        plan_actions.pack(fill=X, pady=(0, 10))
+        ttk.Label(
+            plan_actions,
+            text="方案操作：",
+            style="Section.TLabel",
+        ).pack(side=LEFT, padx=(0, 8))
+        for text, command in (
+            ("导入 TXT 方案", self._load_project),
+            ("保存 TXT 方案", self._save_project),
+            ("格式示例", self._show_txt_example),
+        ):
+            ttk.Button(
+                plan_actions,
+                text=text,
+                command=command,
+                style="Toolbar.TButton",
+            ).pack(side=LEFT, padx=(0, 6))
+        ttk.Separator(
+            plan_actions,
+            orient="vertical",
+        ).pack(side=LEFT, fill="y", padx=(4, 10))
+        ttk.Button(
+            plan_actions,
+            text="清空内容",
+            command=self._clear_txt_content,
+            style="Toolbar.TButton",
+        ).pack(side=LEFT)
+
+        base_group = ttk.LabelFrame(
+            txt_tab,
+            text="路径设置",
+            padding=8,
+        )
+        base_group.pack(fill=X, pady=(0, 10))
+        base_row = ttk.Frame(base_group)
         base_row.pack(fill=X)
         ttk.Label(base_row, text="方案基准文件夹：").pack(side=LEFT)
         ttk.Entry(
@@ -1359,24 +1426,11 @@ class MapperApp:
             command=self._browse_txt_base,
         ).pack(side=LEFT, padx=(8, 0))
 
-        plan_actions = ttk.Frame(txt_tab)
-        plan_actions.pack(fill=X, pady=(10, 6))
-        for text, command in (
-            ("导入 TXT 方案", self._load_project),
-            ("保存 TXT 方案", self._save_project),
-            ("格式示例", self._show_txt_example),
-        ):
-            ttk.Button(plan_actions, text=text, command=command).pack(
-                side=LEFT,
-                padx=(0, 6),
-            )
-        ttk.Button(
-            plan_actions,
-            text="清空内容",
-            command=self._clear_txt_content,
-        ).pack(side=RIGHT)
-
-        ttk.Label(txt_tab, text="方案内容：").pack(anchor=W)
+        ttk.Label(
+            txt_tab,
+            text="方案内容",
+            style="Section.TLabel",
+        ).pack(anchor=W)
         txt_editor_frame = ttk.Frame(txt_tab)
         txt_editor_frame.pack(fill=BOTH, expand=True, pady=(3, 0))
         self.txt_editor = Text(
@@ -1406,6 +1460,7 @@ class MapperApp:
         ttk.Label(
             txt_tab,
             textvariable=self.txt_status,
+            style="Muted.TLabel",
         ).pack(anchor=W, pady=(8, 0))
 
         output_frame = ttk.LabelFrame(
@@ -1458,6 +1513,7 @@ class MapperApp:
             text="开始映射",
             command=self._run,
             width=12,
+            style="Primary.TButton",
         ).pack(side=RIGHT, padx=(0, 8))
 
     def _file_panel(
