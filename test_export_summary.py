@@ -38,6 +38,14 @@ class ExportSummaryTests(unittest.TestCase):
             export_summary.parse_cell_addresses("i8， J8\nL8;I8"),
             ["I8", "J8", "L8"],
         )
+        self.assertEqual(
+            export_summary.parse_cell_addresses("B3-B6, A1-D1"),
+            ["B3", "B4", "B5", "B6", "A1", "B1", "C1", "D1"],
+        )
+        self.assertEqual(
+            export_summary.parse_cell_addresses("B2-A1"),
+            ["A1", "B1", "A2", "B2"],
+        )
         with self.assertRaises(ValueError):
             export_summary.parse_cell_addresses("I0, BAD")
 
@@ -137,4 +145,3 @@ class ExportSummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
