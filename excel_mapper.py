@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import re
 import shutil
+import sys
 from tkinter import (
     BOTH,
     END,
@@ -404,6 +405,112 @@ def output_name_for_target(path: Path) -> str:
     return f"{path.stem}_已映射{suffix}"
 
 
+def excel_automation_available() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import win32com.client  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def execute_mapping_plan_with_excel(
+    source_files: list[Path],
+    target_files: list[Path],
+    rules: list[MappingRule],
+    output_folder: Path,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> list[Path]:
+    """Write values through desktop Excel so workbook formatting stays intact."""
+    import pythoncom
+    import win32com.client
+
+    expanded, _warnings = validate_mapping_plan(
+        source_files,
+        target_files,
+        rules,
+    )
+    output_folder.mkdir(parents=True, exist_ok=True)
+    output_paths: dict[str, Path] = {}
+    for target_path in target_files:
+        output_path = unique_output_path(
+            output_folder / f"{target_path.stem}_已映射{target_path.suffix}"
+        )
+        shutil.copy2(target_path, output_path)
+        output_paths[str(target_path.resolve())] = output_path
+
+    pythoncom.CoInitialize()
+    excel = None
+    source_books: dict[str, object] = {}
+    target_books: dict[str, object] = {}
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        excel.ScreenUpdating = False
+        for source_path in source_files:
+            key = str(source_path.resolve())
+            source_books[key] = excel.Workbooks.Open(
+                str(source_path.resolve()),
+                UpdateLinks=0,
+                ReadOnly=True,
+            )
+        for target_path in target_files:
+            key = str(target_path.resolve())
+            target_books[key] = excel.Workbooks.Open(
+                str(output_paths[key].resolve()),
+                UpdateLinks=0,
+                ReadOnly=False,
+            )
+
+        total = len(expanded)
+        for index, mapping in enumerate(expanded, start=1):
+            if progress:
+                progress(
+                    index - 1,
+                    total,
+                    f"正在无损写入：{Path(mapping.source_file).name}/"
+                    f"{mapping.source_cell} → "
+                    f"{Path(mapping.target_file).name}/{mapping.target_cell}",
+                )
+            source_book = source_books[
+                str(Path(mapping.source_file).resolve())
+            ]
+            target_book = target_books[
+                str(Path(mapping.target_file).resolve())
+            ]
+            source_value = source_book.Worksheets(
+                mapping.source_sheet
+            ).Range(mapping.source_cell).Value
+            target_book.Worksheets(mapping.target_sheet).Range(
+                mapping.target_cell
+            ).Value = source_value
+            if progress:
+                progress(index, total, f"已完成 {index}/{total} 项映射")
+
+        for workbook in target_books.values():
+            workbook.Save()
+        return list(output_paths.values())
+    finally:
+        for workbook in target_books.values():
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+        for workbook in source_books.values():
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
 def execute_mapping_plan(
     source_files: list[Path],
     target_files: list[Path],
@@ -411,6 +518,14 @@ def execute_mapping_plan(
     output_folder: Path,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> list[Path]:
+    if excel_automation_available():
+        return execute_mapping_plan_with_excel(
+            source_files,
+            target_files,
+            rules,
+            output_folder,
+            progress,
+        )
     expanded, _warnings = validate_mapping_plan(
         source_files,
         target_files,
@@ -1610,6 +1725,18 @@ class MapperApp:
             style="Toolbar.TButton",
         )
         self.clear_all_button.pack(side=RIGHT)
+        ttk.Button(
+            navigation,
+            text="Excel 方案 → 手动设置",
+            command=self._convert_scheme_to_manual,
+            style="Toolbar.TButton",
+        ).pack(side=RIGHT, padx=(0, 6))
+        ttk.Button(
+            navigation,
+            text="手动设置 → Excel 方案",
+            command=self._convert_manual_to_scheme,
+            style="Toolbar.TButton",
+        ).pack(side=RIGHT, padx=(0, 6))
 
         page_host = ttk.Frame(content)
         page_host.pack(fill=BOTH, expand=True)
@@ -1722,12 +1849,6 @@ class MapperApp:
             ).pack(side=LEFT, padx=(0, 6))
         ttk.Button(
             self.mapping_actions,
-            text="转换为 Excel 方案 →",
-            command=self._convert_manual_to_scheme,
-            style="Primary.TButton",
-        ).pack(side=RIGHT)
-        ttk.Button(
-            self.mapping_actions,
             text="预检查",
             command=self._precheck,
         ).pack(side=RIGHT, padx=(0, 10))
@@ -1745,7 +1866,7 @@ class MapperApp:
         ).pack(side=LEFT, padx=(0, 8))
         for text, command in (
             ("导入 Excel 方案", self._load_excel_scheme),
-            ("导出 Excel 方案", self._save_excel_scheme),
+            ("导出为可编辑 Excel 方案", self._save_excel_scheme),
             ("生成空白模板", self._save_excel_template),
         ):
             ttk.Button(
@@ -1754,13 +1875,6 @@ class MapperApp:
                 command=command,
                 style="Toolbar.TButton",
             ).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(
-            plan_actions,
-            text="转换为手动设置 →",
-            command=self._convert_scheme_to_manual,
-            style="Primary.TButton",
-        ).pack(side=RIGHT)
-
         base_group = ttk.LabelFrame(
             scheme_tab,
             text="路径设置",

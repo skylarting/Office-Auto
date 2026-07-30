@@ -24,7 +24,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install pyinstaller openpyxl xlrd xlwt
+        run: python -m pip install pyinstaller openpyxl xlrd xlwt pywin32
 
       - name: Run tests
         run: python -m unittest -v
@@ -62,4 +62,3 @@ jobs:
           name: ExcelMapper-Windows
           path: dist/ExcelMapper.exe
           if-no-files-found: error
-
