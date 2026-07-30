@@ -94,8 +94,8 @@ def expand_cell_range(start: str, end: str) -> list[str]:
         raise ValueError("单元格范围过大。")
     return [
         f"{column_number_to_letters(column)}{row}"
-        for row in range(first_row, last_row + 1)
         for column in range(first_column, last_column + 1)
+        for row in range(first_row, last_row + 1)
     ]
 
 
