@@ -177,7 +177,7 @@ class ExcelMapperTests(unittest.TestCase):
     def test_project_round_trip(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)
-            project = folder / "方案.json"
+            project = folder / "方案.txt"
             source = folder / "来源.xlsx"
             target = folder / "目标.xlsx"
             rule = excel_mapper.MappingRule(
@@ -204,7 +204,48 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertEqual(rules, [rule])
             self.assertEqual(output, folder / "输出")
 
+            text = project.read_text(encoding="utf-8-sig")
+            self.assertIn(excel_mapper.TXT_HEADER, text)
+            self.assertNotIn("{", text)
+
+    def test_txt_project_can_be_written_by_hand(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            project = folder / "手工方案.txt"
+            project.write_text(
+                "# 可直接由业务人员编辑\n"
+                "来源.xlsx|数据|A1|目标.xlsx|模板|B2,C2\n",
+                encoding="utf-8-sig",
+            )
+
+            sources, targets, rules, output = (
+                excel_mapper.load_mapping_project(project)
+            )
+
+            self.assertEqual(sources, [(folder / "来源.xlsx").resolve()])
+            self.assertEqual(targets, [(folder / "目标.xlsx").resolve()])
+            self.assertEqual(rules[0].mode, excel_mapper.MODE_ONE_TO_MANY)
+            self.assertIsNone(output)
+
+    def test_mapping_mode_is_inferred(self) -> None:
+        self.assertEqual(
+            excel_mapper.infer_mapping_mode(["A1"], ["B1"]),
+            excel_mapper.MODE_MANUAL,
+        )
+        self.assertEqual(
+            excel_mapper.infer_mapping_mode(["A1"], ["B1", "C1"]),
+            excel_mapper.MODE_ONE_TO_MANY,
+        )
+        self.assertEqual(
+            excel_mapper.infer_mapping_mode(["A1", "A2"], ["B1", "B2"]),
+            excel_mapper.MODE_SEQUENCE,
+        )
+        with self.assertRaises(ValueError):
+            excel_mapper.infer_mapping_mode(
+                ["A1", "A2"],
+                ["B1", "B2", "B3"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
-
