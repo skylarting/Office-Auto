@@ -1415,21 +1415,7 @@ class MapperApp:
         )
         output_frame.pack(fill=X, pady=(10, 0))
         output_content = ttk.Frame(output_frame)
-        output_content.pack(side=LEFT, fill=X, expand=True)
-        run_actions = ttk.Frame(output_frame)
-        run_actions.pack(side=RIGHT, padx=(14, 0))
-        ttk.Button(
-            run_actions,
-            text="开始映射",
-            command=self._run,
-            width=12,
-        ).pack(fill=X)
-        ttk.Button(
-            run_actions,
-            text="退出",
-            command=self.root.destroy,
-            width=12,
-        ).pack(fill=X, pady=(8, 0))
+        output_content.pack(fill=X, expand=True)
 
         location_row = ttk.Frame(output_content)
         location_row.pack(fill=X)
@@ -1452,10 +1438,27 @@ class MapperApp:
             progress_row,
             textvariable=self.progress_text,
         ).pack(side=RIGHT, padx=(8, 0))
-        ttk.Label(output_content, textvariable=self.status).pack(
+
+        status_actions = ttk.Frame(output_content)
+        status_actions.pack(fill=X, pady=(7, 0))
+        ttk.Label(status_actions, textvariable=self.status).pack(
+            side=LEFT,
             anchor=W,
-            pady=(5, 0),
+            fill=X,
+            expand=True,
         )
+        ttk.Button(
+            status_actions,
+            text="退出",
+            command=self.root.destroy,
+            width=12,
+        ).pack(side=RIGHT)
+        ttk.Button(
+            status_actions,
+            text="开始映射",
+            command=self._run,
+            width=12,
+        ).pack(side=RIGHT, padx=(0, 8))
 
     def _file_panel(
         self,
@@ -1818,6 +1821,11 @@ class MapperApp:
             self.txt_status.set("尚无映射关系，TXT 内容为空。")
 
     def _apply_txt_to_manual(self, show_message: bool = True) -> bool:
+        plan_text = self.txt_editor.get("1.0", END).strip()
+        if not plan_text:
+            self._txt_dirty = False
+            self.txt_status.set("TXT 内容为空，未更改手动设置。")
+            return True
         base_text = self.txt_base_folder.get().strip()
         if not base_text:
             message = "请先选择方案基准文件夹。"
@@ -1827,7 +1835,7 @@ class MapperApp:
             return False
         try:
             sources, targets, rules = parse_mapping_project_text(
-                self.txt_editor.get("1.0", END),
+                plan_text,
                 Path(base_text).resolve(),
             )
             _expanded, warnings = validate_mapping_plan(
