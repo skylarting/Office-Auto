@@ -391,19 +391,9 @@ def execute_mapping_plan(
 
 def save_mapping_project(
     path: Path,
-    source_files: list[Path],
-    target_files: list[Path],
     rules: list[MappingRule],
-    output_folder: Path | None,
 ) -> None:
     lines: list[str] = []
-    if output_folder:
-        lines.extend(
-            [
-                f"输出【{format_project_path(output_folder, path.parent)}】",
-                "",
-            ]
-        )
     for rule in rules:
         source_file = format_project_path(Path(rule.source_file), path.parent)
         target_file = format_project_path(Path(rule.target_file), path.parent)
@@ -424,12 +414,12 @@ def save_mapping_project(
 
 def load_mapping_project(
     path: Path,
-) -> tuple[list[Path], list[Path], list[MappingRule], Path | None]:
+) -> tuple[list[Path], list[Path], list[MappingRule], Path]:
     sources: list[Path] = []
     targets: list[Path] = []
     rules: list[MappingRule] = []
-    output_folder: Path | None = None
     base_folder = path.parent
+    output_folder = (base_folder / "映射结果").resolve()
 
     for line_number, raw_line in enumerate(
         path.read_text(encoding="utf-8-sig").splitlines(),
@@ -437,10 +427,6 @@ def load_mapping_project(
     ):
         line = raw_line.strip()
         if not line or line.startswith("#"):
-            continue
-        if line.startswith("输出"):
-            output_text = extract_bracketed_text(line[2:], line_number)
-            output_folder = resolve_project_path(output_text, base_folder)
             continue
         content = extract_bracketed_text(line, line_number)
         direction_parts = PROJECT_DIRECTION_RE.split(content, maxsplit=1)
@@ -1549,12 +1535,7 @@ class MapperApp:
         if selected:
             save_mapping_project(
                 Path(selected),
-                self.source_files,
-                self.target_files,
                 self.rules,
-                Path(self.output_folder.get())
-                if self.output_folder.get()
-                else None,
             )
 
     def _load_project(self) -> None:
@@ -1571,7 +1552,7 @@ class MapperApp:
                 self.rules,
                 output_folder,
             ) = load_mapping_project(Path(selected))
-            self.output_folder.set(str(output_folder) if output_folder else "")
+            self.output_folder.set(str(output_folder))
             self._refresh_file_tree(self.source_tree, self.source_files)
             self._refresh_file_tree(self.target_tree, self.target_files)
             self._refresh_rules()
