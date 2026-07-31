@@ -1328,7 +1328,8 @@ class CellPickerDialog:
         self.result: list[str] | None = None
         self.path = workbook_path
         self.sheet_name = sheet_name
-        self.selected = set(initial_cells)
+        self.selected_order = list(dict.fromkeys(initial_cells))
+        self.selected = set(self.selected_order)
         self.same_position_cells = (
             list(same_position_cells)
             if same_position_cells is not None
@@ -1362,7 +1363,7 @@ class CellPickerDialog:
 
         top = ttk.Frame(container)
         top.pack(fill=X)
-        ttk.Label(top, text="已选择：").pack(side=LEFT)
+        ttk.Label(top, text="已选择（按顺序）：").pack(side=LEFT)
         ttk.Label(top, textvariable=self.selected_text).pack(
             side=LEFT,
             fill=X,
@@ -1612,11 +1613,19 @@ class CellPickerDialog:
             f"{column_number_to_letters(column + 1)}{row + 1}"
             for row, column in cells
         ]
-        address_set = set(addresses)
-        if address_set.issubset(self.selected):
-            self.selected.difference_update(address_set)
+        if all(address in self.selected for address in addresses):
+            for address in addresses:
+                self.selected.discard(address)
+            self.selected_order = [
+                address
+                for address in self.selected_order
+                if address in self.selected
+            ]
         else:
-            self.selected.update(address_set)
+            for address in addresses:
+                if address not in self.selected:
+                    self.selected.add(address)
+                    self.selected_order.append(address)
         for row, column in cells:
             self._refresh_cell(row, column)
         self.anchor = None
@@ -1656,8 +1665,9 @@ class CellPickerDialog:
         self._yview("moveto", max(0, row * self.ROW_HEIGHT / height))
 
     def _clear(self) -> None:
-        previous = list(self.selected)
+        previous = list(self.selected_order)
         self.selected.clear()
+        self.selected_order.clear()
         for address in previous:
             row, column = cell_sort_key(address)
             if row < self.rows and column < self.columns:
@@ -1672,15 +1682,15 @@ class CellPickerDialog:
             for row in range(row_count)
         ]
 
-    def _nonempty_addresses(self) -> set[str]:
-        matches: set[str] = set()
+    def _nonempty_addresses(self) -> list[str]:
+        matches: list[str] = []
         for address in self._used_addresses():
             traits = self.cell_traits_cache.get(address)
             if traits is None:
                 traits = self.reader.cell_traits(self.sheet_name, address)
                 self.cell_traits_cache[address] = traits
             if "nonempty" in traits:
-                matches.add(address)
+                matches.append(address)
         return matches
 
     def _refresh_addresses(self, addresses) -> None:
@@ -1690,36 +1700,56 @@ class CellPickerDialog:
                 self._refresh_cell(row, column)
         self._update_selected_text()
 
-    def _toggle_addresses(self, addresses: set[str]) -> None:
-        if not addresses:
+    def _toggle_addresses(self, addresses) -> None:
+        ordered_addresses = list(dict.fromkeys(addresses))
+        if not ordered_addresses:
             return
-        if addresses.issubset(self.selected):
-            self.selected.difference_update(addresses)
+        if all(address in self.selected for address in ordered_addresses):
+            for address in ordered_addresses:
+                self.selected.discard(address)
+            self.selected_order = [
+                address
+                for address in self.selected_order
+                if address in self.selected
+            ]
         else:
-            self.selected.update(addresses)
-        self._refresh_addresses(addresses)
+            for address in ordered_addresses:
+                if address not in self.selected:
+                    self.selected.add(address)
+                    self.selected_order.append(address)
+        self._refresh_addresses(ordered_addresses)
 
     def _select_all(self) -> None:
         self._toggle_addresses(self._nonempty_addresses())
 
     def _invert_selection(self) -> None:
         addresses = self._nonempty_addresses()
-        self.selected.symmetric_difference_update(addresses)
+        for address in addresses:
+            if address in self.selected:
+                self.selected.remove(address)
+            else:
+                self.selected.add(address)
+                self.selected_order.append(address)
+        self.selected_order = [
+            address
+            for address in self.selected_order
+            if address in self.selected
+        ]
         self._refresh_addresses(addresses)
 
     def _toggle_trait(self, trait: str) -> None:
-        matches: set[str] = set()
+        matches: list[str] = []
         for address in self._used_addresses():
             traits = self.cell_traits_cache.get(address)
             if traits is None:
                 traits = self.reader.cell_traits(self.sheet_name, address)
                 self.cell_traits_cache[address] = traits
             if trait in traits:
-                matches.add(address)
+                matches.append(address)
         self._toggle_addresses(matches)
 
     def _update_selected_text(self) -> None:
-        ordered = sorted(self.selected, key=cell_column_sort_key)
+        ordered = self.selected_order
         if not ordered:
             text = "尚未选择"
         elif len(ordered) <= 50:
@@ -1739,7 +1769,7 @@ class CellPickerDialog:
                 parent=self.window,
             )
             return
-        self.result = sorted(self.selected, key=cell_column_sort_key)
+        self.result = list(self.selected_order)
         self.reader.close()
         self.window.destroy()
 

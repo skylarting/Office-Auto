@@ -681,6 +681,10 @@ class ExcelMapperTests(unittest.TestCase):
             "A1,C3",
         )
         self.assertEqual(
+            excel_mapper.format_cell_addresses(["A2", "A1"]),
+            "A2,A1",
+        )
+        self.assertEqual(
             excel_mapper.format_cell_addresses(
                 [
                     "A1", "A2", "A3",
@@ -689,6 +693,41 @@ class ExcelMapperTests(unittest.TestCase):
                 ]
             ),
             "A1-B3,D1-D3",
+        )
+
+    def test_cell_picker_preserves_click_order(self) -> None:
+        picker = excel_mapper.CellPickerDialog.__new__(
+            excel_mapper.CellPickerDialog
+        )
+        picker.selected = set()
+        picker.selected_order = []
+        picker._refresh_addresses = lambda _addresses: None
+        picker._toggle_addresses(["A2"])
+        picker._toggle_addresses(["A1"])
+        self.assertEqual(picker.selected_order, ["A2", "A1"])
+
+        picker._toggle_addresses(["A2"])
+        self.assertEqual(picker.selected_order, ["A1"])
+        picker._toggle_addresses(["A2"])
+        self.assertEqual(picker.selected_order, ["A1", "A2"])
+
+    def test_sequence_mapping_uses_preserved_address_order(self) -> None:
+        rule = excel_mapper.MappingRule(
+            "来源.xlsx",
+            "数据",
+            excel_mapper.parse_cell_addresses("A2,A1"),
+            "目标.xlsx",
+            "模板",
+            excel_mapper.parse_cell_addresses("A1,A2"),
+            excel_mapper.MODE_SEQUENCE,
+        )
+        expanded = excel_mapper.expand_rule(rule)
+        self.assertEqual(
+            [
+                (item.source_cell, item.target_cell)
+                for item in expanded
+            ],
+            [("A2", "A1"), ("A1", "A2")],
         )
 
     def test_best_name_match_prefers_same_or_common_prefix(self) -> None:
