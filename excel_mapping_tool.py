@@ -258,11 +258,6 @@ class ExcelMappingToolApp(MapperApp):
             add="+",
         )
         self.scheme_tree.bind(
-            "<B1-Motion>",
-            self._scheme_row_drag_motion,
-            add="+",
-        )
-        self.scheme_tree.bind(
             "<ButtonRelease-1>",
             self._scheme_row_button_release,
         )
@@ -287,7 +282,6 @@ class ExcelMappingToolApp(MapperApp):
             "<Control-Shift-V>",
             self._paste_copied_groups,
         )
-        self._row_drag = None
         self._copied_scheme_rules: list[MappingRule] = []
         self.scheme_context_menu = Menu(self.root, tearoff=False)
         self.scheme_context_menu.add_command(
@@ -324,8 +318,10 @@ class ExcelMappingToolApp(MapperApp):
         ttk.Label(
             footer,
             text=(
-                "单击选择，双击浏览或输入；按住“类型”列可拖动行内容，"
-                "Ctrl 可多选；Ctrl+C / Ctrl+V 可复制、粘贴选中行内容；"
+                "单击“映射组”列选中整组，单击“类型”列选中单行；"
+                "按住 Ctrl 可继续多选组或多选行。\n"
+                "单击内容列选择，双击可浏览或输入；"
+                "Ctrl+C / Ctrl+V 可复制、粘贴选中行内容；"
                 "Ctrl+Shift+C / Ctrl+Shift+V 可复制、粘贴完整映射组。\n"
                 "右键可复制、粘贴或插入/删除映射组；"
                 "最后一组是默认新增行，填写或删除后都会自动补充新的空白组。"
@@ -473,33 +469,7 @@ class ExcelMappingToolApp(MapperApp):
                 self.scheme_tree.selection_set(pair)
             self.scheme_tree.focus(iid)
             return "break"
-        if column == "#2" and iid and not iid.startswith("scheme:new:"):
-            self._row_drag = {
-                "iid": iid,
-                "start_y": event.y,
-                "active": False,
-            }
-
-    def _scheme_row_drag_motion(self, event):
-        drag = self._row_drag
-        if not drag:
-            return
-        if not drag["active"] and abs(event.y - drag["start_y"]) < 6:
-            return
-        drag["active"] = True
-        self.scheme_tree.configure(cursor="fleur")
-        destination = self.scheme_tree.identify_row(event.y)
-        if destination:
-            self.scheme_tree.see(destination)
-
     def _scheme_row_button_release(self, event):
-        drag = self._row_drag
-        self._row_drag = None
-        self.scheme_tree.configure(cursor="")
-        if drag and drag["active"]:
-            destination = self.scheme_tree.identify_row(event.y)
-            self._move_selected_row_contents(drag["iid"], destination)
-            return "break"
         return self._schedule_scheme_single_click(event)
 
     def _flatten_row_contents(self) -> list[tuple[str, str, list[str]]]:
@@ -541,49 +511,6 @@ class ExcelMappingToolApp(MapperApp):
                 )
             )
         self.scheme_rules[:] = rebuilt
-
-    def _move_selected_row_contents(
-        self,
-        pressed_iid: str,
-        destination_iid: str,
-    ) -> None:
-        pressed = self._actual_row_index(pressed_iid)
-        if pressed is None:
-            return
-        selected = {
-            index
-            for iid in self.scheme_tree.selection()
-            if (index := self._actual_row_index(iid)) is not None
-        }
-        if pressed not in selected:
-            selected = {pressed}
-        selected = sorted(selected)
-        rows = self._flatten_row_contents()
-        destination = self._actual_row_index(destination_iid)
-        if destination is None:
-            destination = len(rows)
-        moving = [rows[index] for index in selected]
-        remaining = [
-            row for index, row in enumerate(rows) if index not in selected
-        ]
-        insertion = destination - sum(index < destination for index in selected)
-        insertion = max(0, min(insertion, len(remaining)))
-        new_rows = remaining[:insertion] + moving + remaining[insertion:]
-        if new_rows == rows:
-            return
-        self._replace_rules_from_row_contents(new_rows)
-        self._refresh_scheme_tree()
-        moved_iids = []
-        for index in range(insertion, insertion + len(moving)):
-            kind = "source" if index % 2 == 0 else "target"
-            moved_iids.append(f"scheme:{index // 2}:{kind}")
-        self.scheme_tree.selection_set(moved_iids)
-        if moved_iids:
-            self.scheme_tree.focus(moved_iids[0])
-            self.scheme_tree.see(moved_iids[0])
-        self.scheme_status.set(
-            "已移动行内容；映射组和来源/目标已按新位置自动重新编号。"
-        )
 
     def _copy_selected_row_contents(self, _event=None):
         selected = [
