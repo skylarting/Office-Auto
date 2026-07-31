@@ -3182,14 +3182,19 @@ class MapperApp:
             "<Escape>",
             lambda _event: self._cancel_scheme_editor(),
         )
-        editor.bind(
-            "<FocusOut>",
-            lambda _event: self._commit_scheme_editor(None),
-        )
         if open_dropdown:
+            editor.bind(
+                "<<ComboboxSelected>>",
+                lambda _event: self._commit_scheme_editor(None),
+            )
             self.root.after(
                 20,
                 lambda: self._post_scheme_combobox(editor),
+            )
+        else:
+            editor.bind(
+                "<FocusOut>",
+                lambda _event: self._commit_scheme_editor(None),
             )
 
     @staticmethod
