@@ -105,6 +105,19 @@ class ExpandedMapping:
     target_cell: str
 
 
+def mapping_rule_is_blank(rule: MappingRule) -> bool:
+    return not any(
+        (
+            rule.source_file.strip(),
+            rule.source_sheet.strip(),
+            rule.source_cells,
+            rule.target_file.strip(),
+            rule.target_sheet.strip(),
+            rule.target_cells,
+        )
+    )
+
+
 def workbook_files_in_folder(folder: Path) -> list[Path]:
     return sorted(
         path
@@ -3580,7 +3593,11 @@ class MapperApp:
         )
 
     def _save_excel_scheme(self) -> None:
-        if not self.scheme_rules:
+        export_rules = [
+            rule for rule in self.scheme_rules
+            if not mapping_rule_is_blank(rule)
+        ]
+        if not export_rules:
             messagebox.showerror(
                 "方案内容为空",
                 "请先导入方案，或从手动设置生成 Excel 方案。",
@@ -3597,7 +3614,7 @@ class MapperApp:
             try:
                 save_excel_mapping_scheme(
                     path,
-                    self.scheme_rules,
+                    export_rules,
                     path.parent.resolve(),
                 )
                 self.scheme_base_folder.set(str(path.parent.resolve()))
@@ -3700,7 +3717,14 @@ class MapperApp:
             return self.source_files, self.target_files, self.rules
         if not self.scheme_rules:
             raise ValueError("请先导入 Excel 方案，或从手动设置生成方案。")
-        for index, rule in enumerate(self.scheme_rules, start=1):
+        active_rules = [
+            (index, rule)
+            for index, rule in enumerate(self.scheme_rules, start=1)
+            if not mapping_rule_is_blank(rule)
+        ]
+        if not active_rules:
+            raise ValueError("请至少填写一组完整的映射关系。")
+        for index, rule in active_rules:
             if not rule.target_file or not rule.target_sheet:
                 source_line = (
                     f"（导入表第 {rule.source_row} 行）"
@@ -3712,12 +3736,12 @@ class MapperApp:
                     "请在空白目标行补充目标工作簿和工作表。"
                 )
         sources = list(
-            dict.fromkeys(Path(rule.source_file) for rule in self.scheme_rules)
+            dict.fromkeys(Path(rule.source_file) for _, rule in active_rules)
         )
         targets = list(
-            dict.fromkeys(Path(rule.target_file) for rule in self.scheme_rules)
+            dict.fromkeys(Path(rule.target_file) for _, rule in active_rules)
         )
-        return sources, targets, self.scheme_rules
+        return sources, targets, [rule for _, rule in active_rules]
 
     def _scheme_import_status(self, file_name: str) -> str:
         incomplete = [

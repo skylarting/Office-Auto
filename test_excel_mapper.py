@@ -48,6 +48,23 @@ class ExcelMapperTests(unittest.TestCase):
         self.assertEqual(rule.target_sheet, "")
         self.assertEqual(rule.target_cells, [])
 
+    def test_active_plan_ignores_completely_blank_draft_groups(self) -> None:
+        app = excel_mapper.MapperApp.__new__(excel_mapper.MapperApp)
+        app._active_workflow_tab = 1
+        complete = excel_mapper.MappingRule(
+            "来源.xlsx", "数据", ["A1"],
+            "目标.xlsx", "模板", ["A1"],
+            excel_mapper.MODE_MANUAL,
+        )
+        blank = excel_mapper.MappingRule(
+            "", "", [], "", "", [], excel_mapper.MODE_MANUAL
+        )
+        app.scheme_rules = [complete, blank, blank]
+        sources, targets, rules = app._active_plan()
+        self.assertEqual(sources, [Path("来源.xlsx")])
+        self.assertEqual(targets, [Path("目标.xlsx")])
+        self.assertEqual(rules, [complete])
+
     def test_exporting_blank_draft_does_not_insert_fake_a1(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)
