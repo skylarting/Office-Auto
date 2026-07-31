@@ -64,6 +64,36 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertIsNone(sheet["E3"].value)
             workbook.close()
 
+    def test_xls_formula_risk_counts_source_and_target_formulas(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            source = folder / "来源.xls"
+            target = folder / "目标.xls"
+            for path, formula in (
+                (source, "A1+B1"),
+                (target, "A1*B1"),
+            ):
+                workbook = xlwt.Workbook()
+                sheet = workbook.add_sheet("数据")
+                sheet.write(0, 0, 2)
+                sheet.write(0, 1, 3)
+                sheet.write(0, 2, xlwt.Formula(formula))
+                workbook.save(str(path))
+            expanded = [
+                excel_mapper.ExpandedMapping(
+                    str(source),
+                    "数据",
+                    "C1",
+                    str(target),
+                    "数据",
+                    "A1",
+                )
+            ]
+            self.assertEqual(
+                excel_mapper.xls_formula_risk(expanded, [target]),
+                (1, 1),
+            )
+
     def test_workbook_files_in_folder(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

@@ -673,6 +673,47 @@ def _write_xls_value_preserving_style(
         written.xf_idx = old_xf_index
 
 
+def xls_formula_risk(
+    expanded: list[ExpandedMapping],
+    target_files: list[Path],
+) -> tuple[int, int]:
+    """Return mapped source formulas and formulas at risk in target XLS files."""
+    mapped_source_formulas = 0
+    source_readers: dict[str, WorkbookReader] = {}
+    try:
+        for mapping in expanded:
+            source_path = Path(mapping.source_file)
+            if source_path.suffix.lower() != ".xls":
+                continue
+            key = str(source_path.resolve())
+            reader = source_readers.get(key)
+            if reader is None:
+                reader = WorkbookReader(source_path)
+                source_readers[key] = reader
+            if "formula" in reader.cell_traits(
+                mapping.source_sheet,
+                mapping.source_cell,
+            ):
+                mapped_source_formulas += 1
+    finally:
+        for reader in source_readers.values():
+            reader.close()
+
+    target_formulas = 0
+    for target_path in target_files:
+        if target_path.suffix.lower() != ".xls":
+            continue
+        reader = WorkbookReader(target_path)
+        try:
+            for sheet_name in reader.xls_book.sheet_names():
+                target_formulas += len(
+                    reader._xls_formula_cells(sheet_name)
+                )
+        finally:
+            reader.close()
+    return mapped_source_formulas, target_formulas
+
+
 def execute_mapping_plan(
     source_files: list[Path],
     target_files: list[Path],
@@ -1256,11 +1297,17 @@ class CellPickerDialog:
         workbook_path: Path,
         sheet_name: str,
         initial_cells: list[str],
+        same_position_cells: list[str] | None = None,
     ) -> None:
         self.result: list[str] | None = None
         self.path = workbook_path
         self.sheet_name = sheet_name
         self.selected = set(initial_cells)
+        self.same_position_cells = (
+            list(same_position_cells)
+            if same_position_cells is not None
+            else None
+        )
         self.anchor: tuple[int, int] | None = None
         self.cell_display_cache: dict[str, tuple[object, str | None]] = {}
         self.cell_traits_cache: dict[str, set[str]] = {}
@@ -1392,10 +1439,28 @@ class CellPickerDialog:
             side=LEFT,
             padx=(8, 0),
         )
+        if self.same_position_cells is not None:
+            ttk.Button(
+                actions,
+                text="与来源同位置",
+                command=self._use_same_position,
+            ).pack(side=RIGHT)
 
         self._draw()
         self._update_selected_text()
         parent.wait_window(self.window)
+
+    def _use_same_position(self) -> None:
+        if not self.same_position_cells:
+            messagebox.showinfo(
+                "尚未选择来源单元格",
+                "请先设置本组的来源单元格。",
+                parent=self.window,
+            )
+            return
+        self.result = list(self.same_position_cells)
+        self.reader.close()
+        self.window.destroy()
 
     def _draw(self) -> None:
         self.column_header.delete("all")
@@ -1879,6 +1944,15 @@ class MappingDialog:
                 Path(file_var.get()),
                 sheet_var.get(),
                 initial,
+                (
+                    None
+                    if is_source
+                    else (
+                        parse_cell_addresses(self.source_cells.get())
+                        if self.source_cells.get().strip()
+                        else []
+                    )
+                ),
             )
             if dialog.result:
                 cells_var.set(", ".join(dialog.result))
@@ -3238,6 +3312,7 @@ class MapperApp:
                 path,
                 sheet,
                 initial,
+                None if is_source else list(rule.source_cells),
             )
             if dialog.result is None:
                 return
@@ -3436,10 +3511,10 @@ class MapperApp:
                 tags=(group_tag,),
             )
             target_cells = (
-                "默认同位置"
+                "默认同位置；点击可修改"
                 if not rule.source_cells and not rule.target_cells
                 else (
-                    "同位置（跟随来源）；单击可修改"
+                    "同位置"
                     if rule.source_cells
                     and rule.target_cells == rule.source_cells
                     else (
@@ -3488,7 +3563,7 @@ class MapperApp:
                 "目标",
                 workbook_hint,
                 sheet_hint,
-                "默认同位置",
+                "默认同位置；点击可修改",
             ),
             tags=(next_group_tag,),
         )
@@ -3684,6 +3759,27 @@ class MapperApp:
                 parent=self.root,
             ):
                 return
+            if spreadsheet_automation_provider() is None:
+                mapped_formulas, target_formulas = xls_formula_risk(
+                    expanded,
+                    target_files,
+                )
+                if (mapped_formulas or target_formulas) and not (
+                    messagebox.askyesno(
+                        "纯 Python 模式：公式将写成数值",
+                        (
+                            "未检测到可用的 Microsoft Excel 或 WPS，"
+                            "程序将使用纯 Python 兼容模式。\n\n"
+                            f"映射来源中检测到 {mapped_formulas} 个公式单元格；"
+                            f"目标 .xls 中检测到 {target_formulas} 个公式单元格。"
+                            "\n\n公式会按当前计算结果写成数值，"
+                            "输出副本中的原有公式也可能变为数值。"
+                            "\n原文件不会修改。是否继续？"
+                        ),
+                        parent=self.root,
+                    )
+                ):
+                    return
             self.progress.configure(maximum=max(len(expanded), 1), value=0)
             self.progress_text.set("0%")
             outputs = execute_mapping_plan(
