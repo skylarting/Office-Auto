@@ -3899,8 +3899,12 @@ class MapperApp:
                 + "\n".join(str(path) for path in outputs),
                 parent=self.root,
             )
+            self.progress.configure(value=0)
+            self.progress_text.set("0%")
         except Exception as exc:
             self.status.set("映射失败。")
+            self.progress.configure(value=0)
+            self.progress_text.set("0%")
             messagebox.showerror("映射失败", str(exc), parent=self.root)
 
 
