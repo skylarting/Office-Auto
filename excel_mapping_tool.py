@@ -55,6 +55,19 @@ class ImportModeDialog:
             ),
             justify=LEFT,
         ).pack(anchor=W, pady=(8, 18))
+        ttk.Separator(body).pack(fill=X, pady=(0, 10))
+        ttk.Label(
+            body,
+            text=(
+                "支持以下映射表格式：\n"
+                "三列：工作簿、工作表、单元格"
+                "（按来源、目标两行一组）\n"
+                "四列：类型、工作簿、工作表、单元格\n"
+                "五列：映射组、类型、工作簿、工作表、单元格"
+            ),
+            justify=LEFT,
+            foreground="#4F5B66",
+        ).pack(anchor=W, pady=(0, 18))
 
         buttons = ttk.Frame(body)
         buttons.pack(fill=X)
