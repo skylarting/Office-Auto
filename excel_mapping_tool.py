@@ -185,6 +185,12 @@ class ExcelMappingToolApp(MapperApp):
             lambda _event: self._browse_scheme_base(),
         )
 
+        # Reserve the complete execution area before giving the remaining
+        # height to the mapping table. This keeps all buttons visible under
+        # Windows high-DPI/display scaling.
+        footer = ttk.Frame(container)
+        footer.pack(side="bottom", fill=X)
+
         table_surface = ttk.Frame(container)
         table_surface.pack(fill=BOTH, expand=True)
         table_surface.rowconfigure(0, weight=1)
@@ -289,7 +295,7 @@ class ExcelMappingToolApp(MapperApp):
         )
 
         ttk.Label(
-            container,
+            footer,
             text=(
                 "单击选择，双击浏览或输入；按住“类型”列可拖动行内容，"
                 "Ctrl 可多选；右键可复制、粘贴或插入/删除映射组。"
@@ -297,14 +303,14 @@ class ExcelMappingToolApp(MapperApp):
             style="Status.TLabel",
         ).pack(anchor=W, pady=(8, 4))
         ttk.Label(
-            container,
+            footer,
             textvariable=self.scheme_status,
             style="Status.TLabel",
         ).pack(anchor=W, pady=(0, 10))
 
-        ttk.Separator(container).pack(fill=X, pady=(0, 10))
+        ttk.Separator(footer).pack(fill=X, pady=(0, 10))
 
-        output_row = ttk.Frame(container)
+        output_row = ttk.Frame(footer)
         output_row.pack(fill=X)
         ttk.Label(output_row, text="输出文件夹：").pack(side=LEFT)
         self.output_folder_display = StringVar(
@@ -333,7 +339,7 @@ class ExcelMappingToolApp(MapperApp):
             lambda _event: self._browse_output(),
         )
 
-        status_row = ttk.Frame(container)
+        status_row = ttk.Frame(footer)
         status_row.pack(fill=X, pady=(10, 4))
         ttk.Label(
             status_row,
@@ -347,13 +353,13 @@ class ExcelMappingToolApp(MapperApp):
         ).pack(side=RIGHT)
 
         self.progress = ttk.Progressbar(
-            container,
+            footer,
             orient="horizontal",
             mode="determinate",
         )
         self.progress.pack(fill=X, pady=(0, 12))
 
-        actions = ttk.Frame(container)
+        actions = ttk.Frame(footer)
         actions.pack(fill=X)
         ttk.Button(
             actions,
