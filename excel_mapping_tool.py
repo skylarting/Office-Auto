@@ -1,5 +1,6 @@
 """Single-page Excel mapping table application."""
 
+from dataclasses import asdict
 from pathlib import Path
 from tkinter import (
     BOTH,
@@ -278,7 +279,16 @@ class ExcelMappingToolApp(MapperApp):
         self.scheme_tree.bind("<Control-C>", self._copy_selected_row_contents)
         self.scheme_tree.bind("<Control-v>", self._paste_row_contents)
         self.scheme_tree.bind("<Control-V>", self._paste_row_contents)
+        self.scheme_tree.bind(
+            "<Control-Shift-C>",
+            self._copy_selected_groups,
+        )
+        self.scheme_tree.bind(
+            "<Control-Shift-V>",
+            self._paste_copied_groups,
+        )
         self._row_drag = None
+        self._copied_scheme_rules: list[MappingRule] = []
         self.scheme_context_menu = Menu(self.root, tearoff=False)
         self.scheme_context_menu.add_command(
             label="复制选中行内容",
@@ -298,12 +308,16 @@ class ExcelMappingToolApp(MapperApp):
             command=lambda: self._insert_scheme_rule("after"),
         )
         self.scheme_context_menu.add_command(
-            label="复制本组",
-            command=self._duplicate_scheme_rule,
+            label="复制选中映射组",
+            command=self._copy_selected_groups,
+        )
+        self.scheme_context_menu.add_command(
+            label="粘贴映射组",
+            command=self._paste_copied_groups,
         )
         self.scheme_context_menu.add_separator()
         self.scheme_context_menu.add_command(
-            label="删除本组",
+            label="删除选中映射组",
             command=self._delete_scheme_rule,
         )
 
@@ -311,7 +325,10 @@ class ExcelMappingToolApp(MapperApp):
             footer,
             text=(
                 "单击选择，双击浏览或输入；按住“类型”列可拖动行内容，"
-                "Ctrl 可多选；右键可复制、粘贴或插入/删除映射组。"
+                "Ctrl 可多选；Ctrl+C / Ctrl+V 可复制、粘贴选中行内容；"
+                "Ctrl+Shift+C / Ctrl+Shift+V 可复制、粘贴完整映射组。\n"
+                "右键可复制、粘贴或插入/删除映射组；"
+                "最后一组是默认新增行，填写或删除后都会自动补充新的空白组。"
             ),
             style="Status.TLabel",
         ).pack(anchor=W, pady=(8, 4))
@@ -625,6 +642,50 @@ class ExcelMappingToolApp(MapperApp):
             messagebox.showerror("无法粘贴", str(exc), parent=self.root)
         return "break"
 
+    def _copy_selected_groups(self, _event=None):
+        indices = self._selected_scheme_rule_indices()
+        if not indices:
+            self.scheme_status.set("请先选择需要复制的映射组。")
+            return "break"
+        self._copied_scheme_rules = [
+            MappingRule(**asdict(self.scheme_rules[index]))
+            for index in indices
+        ]
+        self.scheme_status.set(
+            f"已复制 {len(indices)} 个映射组；"
+            "可在目标位置右键选择“粘贴映射组”。"
+        )
+        return "break"
+
+    def _paste_copied_groups(self, _event=None):
+        if not self._copied_scheme_rules:
+            self.scheme_status.set("尚未复制映射组。")
+            return "break"
+        focused = self.scheme_tree.focus()
+        try:
+            insertion = int(focused.split(":")[1]) + 1
+        except (IndexError, ValueError):
+            insertion = len(self.scheme_rules)
+        copies = [
+            MappingRule(**asdict(rule))
+            for rule in self._copied_scheme_rules
+        ]
+        self.scheme_rules[insertion:insertion] = copies
+        self._refresh_scheme_tree()
+        selected_iids = []
+        for index in range(insertion, insertion + len(copies)):
+            selected_iids.extend(
+                (
+                    f"scheme:{index}:source",
+                    f"scheme:{index}:target",
+                )
+            )
+        self.scheme_tree.selection_set(selected_iids)
+        self.scheme_tree.focus(selected_iids[0])
+        self.scheme_tree.see(selected_iids[0])
+        self.scheme_status.set(f"已粘贴 {len(copies)} 个映射组。")
+        return "break"
+
     def _load_excel_scheme(self) -> None:
         from tkinter import filedialog
 
@@ -680,7 +741,11 @@ class ExcelMappingToolApp(MapperApp):
         self.scheme_context_menu.entryconfigure(0, state=state)
         self.scheme_context_menu.entryconfigure(1, state=state)
         self.scheme_context_menu.entryconfigure(5, state=state)
-        self.scheme_context_menu.entryconfigure(7, state=state)
+        self.scheme_context_menu.entryconfigure(
+            6,
+            state=("normal" if self._copied_scheme_rules else "disabled"),
+        )
+        self.scheme_context_menu.entryconfigure(8, state="normal")
         try:
             self.scheme_context_menu.tk_popup(event.x_root, event.y_root)
         finally:

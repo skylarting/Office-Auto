@@ -65,6 +65,25 @@ class ExcelMapperTests(unittest.TestCase):
         self.assertEqual(targets, [Path("目标.xlsx")])
         self.assertEqual(rules, [complete])
 
+    def test_selected_scheme_indices_deduplicate_source_target_rows(self) -> None:
+        class FakeTree:
+            @staticmethod
+            def selection():
+                return (
+                    "scheme:0:source",
+                    "scheme:0:target",
+                    "scheme:2:source",
+                )
+
+            @staticmethod
+            def focus():
+                return "scheme:0:source"
+
+        app = excel_mapper.MapperApp.__new__(excel_mapper.MapperApp)
+        app.scheme_tree = FakeTree()
+        app.scheme_rules = [object(), object(), object()]
+        self.assertEqual(app._selected_scheme_rule_indices(), [0, 2])
+
     def test_exporting_blank_draft_does_not_insert_fake_a1(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

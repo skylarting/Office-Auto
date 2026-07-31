@@ -2974,6 +2974,25 @@ class MapperApp:
         except (IndexError, ValueError):
             return None
 
+    def _selected_scheme_rule_indices(self) -> list[int]:
+        indices: set[int] = set()
+        for iid in self.scheme_tree.selection():
+            try:
+                index = int(iid.split(":")[1])
+            except (IndexError, ValueError):
+                continue
+            if 0 <= index < len(self.scheme_rules):
+                indices.add(index)
+        if not indices:
+            focused = self.scheme_tree.focus()
+            try:
+                index = int(focused.split(":")[1])
+            except (IndexError, ValueError):
+                index = -1
+            if 0 <= index < len(self.scheme_rules):
+                indices.add(index)
+        return sorted(indices)
+
     def _new_scheme_rule(self) -> MappingRule:
         return MappingRule("", "", [], "", "", [], MODE_MANUAL)
 
@@ -3045,18 +3064,38 @@ class MapperApp:
         self.scheme_status.set("已复制映射组。")
 
     def _delete_scheme_rule(self) -> None:
-        index = self._selected_scheme_rule_index()
-        if index is None:
+        indices = self._selected_scheme_rule_indices()
+        selected_default_row = any(
+            iid.startswith("scheme:new:")
+            for iid in self.scheme_tree.selection()
+        )
+        if not indices:
+            if selected_default_row:
+                self._refresh_scheme_tree()
+                self.scheme_status.set(
+                    "已清空默认新增行；程序已在最下方自动补充新的空白组。"
+                )
+                return
+            messagebox.showinfo(
+                "请选择映射组",
+                "请先选中一个或多个映射组。",
+                parent=self.root,
+            )
             return
+        group_text = "、".join(str(index + 1) for index in indices)
         if not messagebox.askyesno(
-            "删除映射组",
-            f"确定删除第 {index + 1} 组来源和目标吗？",
+            "删除选中映射组",
+            f"确定删除第 {group_text} 组的来源和目标吗？",
             parent=self.root,
         ):
             return
-        self.scheme_rules.pop(index)
+        for index in reversed(indices):
+            self.scheme_rules.pop(index)
         self._refresh_scheme_tree()
-        self.scheme_status.set("已删除映射组。")
+        self.scheme_status.set(
+            f"已删除 {len(indices)} 个映射组；"
+            "最下方已自动保留默认新增行。"
+        )
 
     def _begin_selected_scheme_cell_edit(self, _event=None) -> str:
         selected = self.scheme_tree.selection()
