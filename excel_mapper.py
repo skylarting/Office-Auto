@@ -336,10 +336,10 @@ class WorkbookReader:
             stream, _base, stream_length = compound.locate_named_stream("Book")
         formulas: set[tuple[int, int]] = set()
         if stream is not None:
-            # xlrd 的工作表偏移量相对于 Workbook 流本身，而
-            # locate_named_stream 返回的字节对象也以该流为坐标。
+            # xlrd 的工作表偏移量使用 locate_named_stream 返回字节对象
+            # 的绝对坐标；流结束位置则是 base + stream_length。
             position = book._sh_abs_posn[sheet.number]
-            limit = stream_length
+            limit = _base + stream_length
             while position + 4 <= limit:
                 record_id, record_size = struct.unpack(
                     "<HH",
@@ -365,12 +365,22 @@ class WorkbookReader:
             if row_index >= sheet.nrows or column_index >= sheet.ncols:
                 return traits
             cell = sheet.cell(row_index, column_index)
-            if (row_index, column_index) in self._xls_formula_cells(sheet_name):
+            is_formula = (
+                (row_index, column_index)
+                in self._xls_formula_cells(sheet_name)
+                or (
+                    cell.ctype == xlrd.XL_CELL_TEXT
+                    and str(cell.value).lstrip().startswith("=")
+                )
+            )
+            if is_formula:
                 traits.add("formula")
             elif cell.ctype in (xlrd.XL_CELL_NUMBER, xlrd.XL_CELL_DATE):
                 traits.add("number")
             elif cell.ctype == xlrd.XL_CELL_TEXT:
                 traits.add("text")
+            if is_formula or cell.value not in (None, ""):
+                traits.add("nonempty")
         else:
             cell = self.format_book[sheet_name][address]
             if cell.data_type == "f":
@@ -382,7 +392,10 @@ class WorkbookReader:
                 traits.add("number")
             elif isinstance(cell.value, str):
                 traits.add("text")
-        if self.fill_color(sheet_name, address):
+            if cell.data_type == "f" or cell.value not in (None, ""):
+                traits.add("nonempty")
+        fill_color = self.fill_color(sheet_name, address)
+        if fill_color and fill_color.upper() != "#FFFFFF":
             traits.add("fill")
         return traits
 
@@ -1278,7 +1291,6 @@ class CellPickerDialog:
             fill=X,
             expand=True,
         )
-        ttk.Button(top, text="清空", command=self._clear).pack(side=RIGHT)
         ttk.Button(top, text="跳转", command=self._jump).pack(
             side=RIGHT,
             padx=(6, 0),
@@ -1297,18 +1309,28 @@ class CellPickerDialog:
         quick_select.pack(fill=X, pady=(0, 8))
         ttk.Label(quick_select, text="批量选择：").pack(side=LEFT)
         for text, command in (
+            ("清空", self._clear),
             ("全选", self._select_all),
             ("反选", self._invert_selection),
-            ("数值型", lambda: self._toggle_trait("number")),
-            ("文字型", lambda: self._toggle_trait("text")),
-            ("公式型", lambda: self._toggle_trait("formula")),
-            ("带底色", lambda: self._toggle_trait("fill")),
         ):
             ttk.Button(
                 quick_select,
                 text=text,
                 command=command,
             ).pack(side=LEFT, padx=(0, 6))
+        for text, command in reversed(
+            (
+                ("公式型", lambda: self._toggle_trait("formula")),
+                ("数值（非公式）", lambda: self._toggle_trait("number")),
+                ("带底色", lambda: self._toggle_trait("fill")),
+                ("文字型", lambda: self._toggle_trait("text")),
+            )
+        ):
+            ttk.Button(
+                quick_select,
+                text=text,
+                command=command,
+            ).pack(side=RIGHT, padx=(6, 0))
 
         table = ttk.Frame(container)
         table.pack(fill=BOTH, expand=True)
@@ -1495,10 +1517,11 @@ class CellPickerDialog:
             f"{column_number_to_letters(column + 1)}{row + 1}"
             for row, column in cells
         ]
-        if len(addresses) == 1 and addresses[0] in self.selected:
-            self.selected.remove(addresses[0])
+        address_set = set(addresses)
+        if address_set.issubset(self.selected):
+            self.selected.difference_update(address_set)
         else:
-            self.selected.update(addresses)
+            self.selected.update(address_set)
         for row, column in cells:
             self._refresh_cell(row, column)
         self.anchor = None
@@ -1554,6 +1577,17 @@ class CellPickerDialog:
             for row in range(row_count)
         ]
 
+    def _nonempty_addresses(self) -> set[str]:
+        matches: set[str] = set()
+        for address in self._used_addresses():
+            traits = self.cell_traits_cache.get(address)
+            if traits is None:
+                traits = self.reader.cell_traits(self.sheet_name, address)
+                self.cell_traits_cache[address] = traits
+            if "nonempty" in traits:
+                matches.add(address)
+        return matches
+
     def _refresh_addresses(self, addresses) -> None:
         for address in addresses:
             row, column = cell_sort_key(address)
@@ -1571,10 +1605,10 @@ class CellPickerDialog:
         self._refresh_addresses(addresses)
 
     def _select_all(self) -> None:
-        self._toggle_addresses(set(self._used_addresses()))
+        self._toggle_addresses(self._nonempty_addresses())
 
     def _invert_selection(self) -> None:
-        addresses = set(self._used_addresses())
+        addresses = self._nonempty_addresses()
         self.selected.symmetric_difference_update(addresses)
         self._refresh_addresses(addresses)
 

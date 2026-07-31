@@ -112,11 +112,32 @@ class ExcelMapperTests(unittest.TestCase):
             legacy_sheet.write(0, 0, 12.5)
             legacy_sheet.write(1, 0, "文字")
             legacy_sheet.write(2, 0, xlwt.Formula("A1*2"))
+            yellow = xlwt.easyxf(
+                "pattern: pattern solid, fore_colour yellow;"
+            )
+            white = xlwt.easyxf(
+                "pattern: pattern solid, fore_colour white;"
+            )
+            legacy_sheet.write(3, 0, "", yellow)
+            legacy_sheet.write(4, 0, "", white)
+            for row in range(5, 205):
+                legacy_sheet.write(row, 0, row)
+            legacy_sheet.write(205, 0, xlwt.Formula("A1*3"))
             legacy.save(str(xls_path))
             legacy_reader = excel_mapper.WorkbookReader(xls_path)
             self.assertIn("number", legacy_reader.cell_traits("数据", "A1"))
             self.assertIn("text", legacy_reader.cell_traits("数据", "A2"))
             self.assertIn("formula", legacy_reader.cell_traits("数据", "A3"))
+            self.assertIn("fill", legacy_reader.cell_traits("数据", "A4"))
+            self.assertNotIn("fill", legacy_reader.cell_traits("数据", "A5"))
+            self.assertIn(
+                "formula",
+                legacy_reader.cell_traits("数据", "A206"),
+            )
+            self.assertNotIn(
+                "number",
+                legacy_reader.cell_traits("数据", "A206"),
+            )
             legacy_reader.close()
 
     def test_expand_sequence_and_one_to_many(self) -> None:
