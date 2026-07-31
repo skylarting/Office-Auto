@@ -9,6 +9,7 @@ from tkinter import (
     X,
     Menu,
     StringVar,
+    Toplevel,
     Tk,
     messagebox,
     ttk,
@@ -17,11 +18,76 @@ from tkinter import (
 from excel_mapper import (
     MapperApp,
     MappingRule,
+    MODE_MANUAL,
     format_cell_addresses,
     infer_mapping_mode,
+    load_excel_mapping_scheme,
     parse_cell_addresses,
     resolve_project_path,
 )
+
+
+class ImportModeDialog:
+    """Ask whether an imported scheme replaces or extends current rules."""
+
+    def __init__(self, parent, imported_count: int, current_count: int):
+        self.result = None
+        dialog = Toplevel(parent)
+        self.window = dialog
+        dialog.title("选择导入方式")
+        dialog.transient(parent)
+        dialog.resizable(False, False)
+        dialog.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill=BOTH, expand=True)
+        ttk.Label(
+            body,
+            text=f"映射表中包含 {imported_count} 组映射。",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(anchor=W)
+        ttk.Label(
+            body,
+            text=(
+                f"当前已有 {current_count} 组映射，请选择导入方式：\n"
+                "“清空并覆盖”会删除当前内容；"
+                "“新增到现有映射”会保留当前内容。"
+            ),
+            justify=LEFT,
+        ).pack(anchor=W, pady=(8, 18))
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill=X)
+        ttk.Button(
+            buttons,
+            text="清空并覆盖",
+            command=lambda: self._finish("replace"),
+        ).pack(side=LEFT)
+        ttk.Button(
+            buttons,
+            text="新增到现有映射",
+            command=lambda: self._finish("append"),
+        ).pack(side=LEFT, padx=8)
+        ttk.Button(
+            buttons,
+            text="取消",
+            command=self._cancel,
+        ).pack(side=RIGHT)
+
+        dialog.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - dialog.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        dialog.grab_set()
+        parent.wait_window(dialog)
+
+    def _finish(self, result: str) -> None:
+        self.result = result
+        self.window.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.window.destroy()
 
 
 class ExcelMappingToolApp(MapperApp):
@@ -416,13 +482,13 @@ class ExcelMappingToolApp(MapperApp):
         rows: list[tuple[str, str, list[str]]],
     ) -> None:
         if len(rows) % 2:
-            rows.append(("", "", ["A1"]))
+            rows.append(("", "", []))
         rebuilt = []
         for offset in range(0, len(rows), 2):
             source_file, source_sheet, source_cells = rows[offset]
             target_file, target_sheet, target_cells = rows[offset + 1]
-            source_cells = source_cells or ["A1"]
-            target_cells = target_cells or list(source_cells)
+            source_cells = list(source_cells)
+            target_cells = list(target_cells)
             rebuilt.append(
                 MappingRule(
                     source_file,
@@ -431,7 +497,11 @@ class ExcelMappingToolApp(MapperApp):
                     target_file,
                     target_sheet,
                     list(target_cells),
-                    infer_mapping_mode(source_cells, target_cells),
+                    (
+                        infer_mapping_mode(source_cells, target_cells)
+                        if source_cells and target_cells
+                        else MODE_MANUAL
+                    ),
                 )
             )
         self.scheme_rules[:] = rebuilt
@@ -526,7 +596,7 @@ class ExcelMappingToolApp(MapperApp):
                 )
             rows = self._flatten_row_contents()
             while len(rows) < start + len(incoming):
-                rows.extend([("", "", ["A1"]), ("", "", ["A1"])])
+                rows.extend([("", "", []), ("", "", [])])
             for offset, content in enumerate(incoming):
                 rows[start + offset] = content
             self._replace_rules_from_row_contents(rows)
@@ -535,6 +605,49 @@ class ExcelMappingToolApp(MapperApp):
         except Exception as exc:
             messagebox.showerror("无法粘贴", str(exc), parent=self.root)
         return "break"
+
+    def _load_excel_scheme(self) -> None:
+        from tkinter import filedialog
+
+        selected = filedialog.askopenfilename(
+            title="导入 Excel 映射方案",
+            filetypes=[("Excel 映射方案", "*.xlsx *.xlsm")],
+        )
+        if not selected:
+            return
+        try:
+            path = Path(selected)
+            _sources, _targets, imported_rules = (
+                load_excel_mapping_scheme(path)
+            )
+            choice = ImportModeDialog(
+                self.root,
+                len(imported_rules),
+                len(self.scheme_rules),
+            ).result
+            if choice is None:
+                return
+            if choice == "append":
+                self.scheme_rules.extend(imported_rules)
+                if not self.scheme_base_folder.get().strip():
+                    self.scheme_base_folder.set(str(path.parent.resolve()))
+                action = "新增"
+            else:
+                self.scheme_rules[:] = imported_rules
+                self.scheme_base_folder.set(str(path.parent.resolve()))
+                action = "清空并覆盖"
+            self._refresh_scheme_tree()
+            if not self.output_folder.get().strip():
+                self.output_folder.set(
+                    str(path.parent.resolve() / "映射结果")
+                )
+            self.scheme_status.set(
+                f"已{action}导入 {len(imported_rules)} 组映射；"
+                f"当前共 {len(self.scheme_rules)} 组。"
+            )
+        except Exception as exc:
+            self.scheme_status.set(f"导入失败：{exc}")
+            messagebox.showerror("导入失败", str(exc), parent=self.root)
 
     def _show_scheme_context_menu(self, event) -> str:
         iid = self.scheme_tree.identify_row(event.y)

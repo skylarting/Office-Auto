@@ -38,6 +38,32 @@ def make_xls(path: Path, sheet_name: str) -> None:
 
 
 class ExcelMapperTests(unittest.TestCase):
+    def test_new_scheme_rule_starts_as_a_true_blank_row(self) -> None:
+        app = excel_mapper.MapperApp.__new__(excel_mapper.MapperApp)
+        rule = app._new_scheme_rule()
+        self.assertEqual(rule.source_file, "")
+        self.assertEqual(rule.source_sheet, "")
+        self.assertEqual(rule.source_cells, [])
+        self.assertEqual(rule.target_file, "")
+        self.assertEqual(rule.target_sheet, "")
+        self.assertEqual(rule.target_cells, [])
+
+    def test_exporting_blank_draft_does_not_insert_fake_a1(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            path = folder / "空白方案.xlsx"
+            rule = excel_mapper.MappingRule(
+                "", "", [], "", "", [], excel_mapper.MODE_MANUAL
+            )
+            excel_mapper.save_excel_mapping_scheme(path, [rule], folder)
+            workbook = load_workbook(path, data_only=False)
+            sheet = workbook["映射方案"]
+            self.assertIsNone(sheet["C2"].value)
+            self.assertIsNone(sheet["D2"].value)
+            self.assertIsNone(sheet["E2"].value)
+            self.assertIsNone(sheet["E3"].value)
+            workbook.close()
+
     def test_workbook_files_in_folder(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

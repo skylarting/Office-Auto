@@ -851,14 +851,18 @@ def save_excel_mapping_scheme(
             [
                 index,
                 "来源",
-                format_project_path(Path(rule.source_file), base_folder),
+                (
+                    format_project_path(Path(rule.source_file), base_folder)
+                    if rule.source_file
+                    else ""
+                ),
                 rule.source_sheet,
                 format_cell_addresses(rule.source_cells),
             ]
         )
         target_cells = (
             "同位置"
-            if rule.source_cells == rule.target_cells
+            if rule.source_cells and rule.source_cells == rule.target_cells
             else format_cell_addresses(rule.target_cells)
         )
         sheet.append(
@@ -2871,42 +2875,10 @@ class MapperApp:
             return None
 
     def _new_scheme_rule(self) -> MappingRule:
-        base = self._default_scheme_base_folder() or Path.cwd()
-        source_file = (
-            Path(self.scheme_rules[-1].source_file)
-            if self.scheme_rules
-            else base / "来源工作簿.xlsx"
-        )
-        target_file = (
-            Path(self.scheme_rules[-1].target_file)
-            if self.scheme_rules
-            else base / "目标工作簿.xlsx"
-        )
-        source_sheet = (
-            self.scheme_rules[-1].source_sheet
-            if self.scheme_rules
-            else "来源工作表"
-        )
-        target_sheet = (
-            self.scheme_rules[-1].target_sheet
-            if self.scheme_rules
-            else "目标工作表"
-        )
-        return MappingRule(
-            str(source_file),
-            source_sheet,
-            ["A1"],
-            str(target_file),
-            target_sheet,
-            ["A1"],
-            MODE_MANUAL,
-        )
+        return MappingRule("", "", [], "", "", [], MODE_MANUAL)
 
     def _add_scheme_rule(self) -> None:
-        base = self._default_scheme_base_folder() or Path.cwd()
         self.scheme_rules.append(self._new_scheme_rule())
-        if not self.scheme_base_folder.get().strip():
-            self.scheme_base_folder.set(str(base))
         self._refresh_scheme_tree()
         iid = f"scheme:{len(self.scheme_rules) - 1}:source"
         self.scheme_tree.selection_set(iid)
@@ -2918,10 +2890,7 @@ class MapperApp:
         if not iid.startswith("scheme:new:"):
             return iid
         kind = iid.rsplit(":", 1)[-1]
-        base = self._default_scheme_base_folder() or Path.cwd()
         self.scheme_rules.append(self._new_scheme_rule())
-        if not self.scheme_base_folder.get().strip():
-            self.scheme_base_folder.set(str(base))
         index = len(self.scheme_rules) - 1
         self._refresh_scheme_tree()
         actual_iid = f"scheme:{index}:{kind}"
@@ -3147,7 +3116,7 @@ class MapperApp:
                 names = []
             return current, names
         cells = rule.source_cells if is_source else rule.target_cells
-        if not is_source and cells == rule.source_cells:
+        if not is_source and rule.source_cells and cells == rule.source_cells:
             return "同位置", []
         return format_cell_addresses(cells), []
 
@@ -3225,7 +3194,15 @@ class MapperApp:
             index = int(index_text)
             rule = self.scheme_rules[index]
             is_source = kind == "source"
-            path = Path(rule.source_file if is_source else rule.target_file)
+            path_text = (
+                rule.source_file if is_source else rule.target_file
+            )
+            if not path_text:
+                raise ValueError(
+                    "请先单击“工作簿”单元格选择工作簿，"
+                    "或双击该单元格浏览文件。"
+                )
+            path = Path(path_text)
             sheet = rule.source_sheet if is_source else rule.target_sheet
             initial = (
                 list(rule.source_cells)
@@ -3341,6 +3318,12 @@ class MapperApp:
                     if old_same_position:
                         rule.target_cells = list(rule.source_cells)
                 else:
+                    if value in ("同位置", "与读取单元格相同") and not (
+                        rule.source_cells
+                    ):
+                        raise ValueError(
+                            "请先设置来源单元格，再使用“同位置”。"
+                        )
                     rule.target_cells = (
                         list(rule.source_cells)
                         if value in ("同位置", "与读取单元格相同")
@@ -3402,14 +3385,21 @@ class MapperApp:
         self._cancel_scheme_editor()
         self.scheme_tree.delete(*self.scheme_tree.get_children())
         base = self._default_scheme_base_folder()
+        workbook_hint = "单击选择；双击浏览"
+        sheet_hint = "单击选择；双击输入"
+        cell_hint = "单击选择；双击输入"
         for index, rule in enumerate(self.scheme_rules):
             group = index + 1
             group_tag = "group_odd" if group % 2 else "group_even"
-            source_file = format_project_path(Path(rule.source_file), base)
+            source_file = (
+                format_project_path(Path(rule.source_file), base)
+                if rule.source_file
+                else workbook_hint
+            )
             target_file = (
                 format_project_path(Path(rule.target_file), base)
                 if rule.target_file
-                else ""
+                else workbook_hint
             )
             self.scheme_tree.insert(
                 "",
@@ -3419,15 +3409,28 @@ class MapperApp:
                     group,
                     "来源",
                     source_file,
-                    rule.source_sheet,
-                    format_cell_addresses(rule.source_cells),
+                    rule.source_sheet or sheet_hint,
+                    (
+                        format_cell_addresses(rule.source_cells)
+                        if rule.source_cells
+                        else cell_hint
+                    ),
                 ),
                 tags=(group_tag,),
             )
             target_cells = (
-                "同位置"
-                if rule.target_cells == rule.source_cells
-                else format_cell_addresses(rule.target_cells)
+                "默认同位置（跟随来源）；单击可修改"
+                if not rule.source_cells and not rule.target_cells
+                else (
+                    "同位置（跟随来源）；单击可修改"
+                    if rule.source_cells
+                    and rule.target_cells == rule.source_cells
+                    else (
+                        format_cell_addresses(rule.target_cells)
+                        if rule.target_cells
+                        else cell_hint
+                    )
+                )
             )
             self.scheme_tree.insert(
                 "",
@@ -3437,7 +3440,7 @@ class MapperApp:
                     group,
                     "目标",
                     target_file,
-                    rule.target_sheet,
+                    rule.target_sheet or sheet_hint,
                     target_cells,
                 ),
                 tags=(group_tag,),
@@ -3450,14 +3453,26 @@ class MapperApp:
             "",
             END,
             iid="scheme:new:source",
-            values=(next_group, "来源", "", "", ""),
+            values=(
+                next_group,
+                "来源",
+                workbook_hint,
+                sheet_hint,
+                cell_hint,
+            ),
             tags=(next_group_tag,),
         )
         self.scheme_tree.insert(
             "",
             END,
             iid="scheme:new:target",
-            values=(next_group, "目标", "", "", "同位置"),
+            values=(
+                next_group,
+                "目标",
+                workbook_hint,
+                sheet_hint,
+                "默认同位置（跟随来源）；单击可修改",
+            ),
             tags=(next_group_tag,),
         )
 
