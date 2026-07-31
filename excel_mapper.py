@@ -652,6 +652,7 @@ def load_mapping_project(
 
 
 SCHEME_HEADERS = ("映射组", "类型", "工作簿", "工作表", "单元格")
+TYPED_SCHEME_HEADERS = ("类型", "工作簿", "工作表", "单元格")
 COMPACT_SCHEME_HEADERS = ("工作簿", "工作表", "单元格")
 
 
@@ -751,17 +752,21 @@ def load_excel_mapping_scheme(
         sheet = workbook["映射方案"] if "映射方案" in workbook.sheetnames else workbook.active
         headers = tuple(sheet.cell(1, column).value for column in range(1, 6))
         standard_layout = headers == SCHEME_HEADERS
+        typed_layout = headers[:4] == TYPED_SCHEME_HEADERS
         compact_layout = headers[:3] == COMPACT_SCHEME_HEADERS
-        if not standard_layout and not compact_layout:
+        if not standard_layout and not typed_layout and not compact_layout:
             raise ValueError(
                 "方案表头应为以下任意一种：\n"
                 "1. 映射组、类型、工作簿、工作表、单元格\n"
-                "2. 工作簿、工作表、单元格"
+                "2. 类型、工作簿、工作表、单元格\n"
+                "3. 工作簿、工作表、单元格"
             )
         groups: dict[str, dict[str, tuple[int, list[object]]]] = {}
         compact_row_index = 0
+        typed_group_index = 0
+        typed_group_has_target = False
         for row_number in range(2, sheet.max_row + 1):
-            column_count = 5 if standard_layout else 3
+            column_count = 5 if standard_layout else (4 if typed_layout else 3)
             raw_values = [
                 sheet.cell(row_number, column).value
                 for column in range(1, column_count + 1)
@@ -773,6 +778,27 @@ def load_excel_mapping_scheme(
                 kind = "来源" if compact_row_index % 2 == 0 else "目标"
                 values = [group, kind, *raw_values]
                 compact_row_index += 1
+            elif typed_layout:
+                kind = str(raw_values[0] or "").strip()
+                if kind == "来源":
+                    typed_group_index += 1
+                    typed_group_has_target = False
+                elif kind == "目标":
+                    if typed_group_index == 0:
+                        raise ValueError(
+                            f"第 {row_number} 行是目标，但前面没有对应的来源行。"
+                        )
+                    if typed_group_has_target:
+                        raise ValueError(
+                            f"第 {row_number} 行是目标，但上一组已经有目标行；"
+                            "请先增加一行来源。"
+                        )
+                    typed_group_has_target = True
+                else:
+                    raise ValueError(
+                        f"第 {row_number} 行的类型不正确；只能填写来源或目标。"
+                    )
+                values = [str(typed_group_index), kind, *raw_values[1:]]
             else:
                 values = raw_values
             if all(value in (None, "") for value in values):

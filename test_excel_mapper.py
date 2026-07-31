@@ -356,6 +356,33 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertEqual(rules[0].source_row, 2)
             self.assertIsNone(rules[0].target_row)
 
+    def test_four_column_scheme_infers_groups_from_source_target_types(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            scheme = folder / "四列映射方案.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["类型", "工作簿", "工作表", "单元格"])
+            sheet.append(["来源", "来源一.xlsx", "数据", "A1-A3"])
+            sheet.append(["目标", "目标一.xlsx", "模板", "同位置"])
+            sheet.append(["来源", "来源二.xlsx", "汇总", "C2"])
+            workbook.save(scheme)
+            workbook.close()
+
+            sources, targets, rules = (
+                excel_mapper.load_excel_mapping_scheme(scheme)
+            )
+
+            self.assertEqual(len(rules), 2)
+            self.assertEqual(len(sources), 2)
+            self.assertEqual(len(targets), 1)
+            self.assertEqual(rules[0].target_cells, rules[0].source_cells)
+            self.assertEqual(rules[1].target_file, "")
+            self.assertEqual(rules[1].source_row, 4)
+            self.assertIsNone(rules[1].target_row)
+
     def test_project_text_can_be_serialized_and_parsed_in_memory(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

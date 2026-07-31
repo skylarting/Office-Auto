@@ -165,6 +165,18 @@ Excel 方案表固定使用五列：
 
 精简表按非空数据行自动识别为“来源、目标、来源、目标……”。
 
+也可以只省略“映射组”，使用四列表。程序会根据“来源/目标”自动生成映射组：
+
+| 类型 | 工作簿 | 工作表 | 单元格 |
+|---|---|---|---|
+| 来源 | 来源.xlsx | 数据 | A1-B3 |
+| 目标 | 目标.xlsx | 模板 | 同位置 |
+
+`ExcelMappingTool.exe` 是只保留可编辑映射表格的精简版本。在“类型”列按住
+鼠标即可拖动一行或 Ctrl 多选的多行；拖动的只有工作簿、工作表、单元格三列，
+映射组和来源/目标会根据放下后的行位置自动重新编号。右键或 Ctrl+C/Ctrl+V
+可复制、粘贴所选行的后三列内容。
+
 “手动设置”和“Excel 方案”按钮只切换页面，不会隐式转换或覆盖内容。点击
 转换按钮才会同步另一页面。点击“预检查”或“开始映射”时，程序进行完整
 检查并提示具体错误。
@@ -176,5 +188,5 @@ Excel 方案表固定使用五列：
 ## 构建 Windows EXE
 
 推送到 GitHub 后，`Build Windows EXE` 工作流会在 Windows 环境中运行测试并
-生成 `ExcelSummary.exe` 和 `ExcelMapper.exe`。在 Actions 运行页面底部
-分别下载 `ExcelSummary-Windows` 和 `ExcelMapper-Windows` 构建产物。
+生成 `ExcelSummary.exe`、`ExcelMapper.exe` 和 `ExcelMappingTool.exe`。
+在 Actions 运行页面底部分别下载对应的 Windows 构建产物。
