@@ -74,7 +74,7 @@ Excel 或 WPS 打开源文件、完成计算并保存，再运行本工具。
 ## 本地运行
 
 ```bash
-python -m pip install openpyxl xlrd
+python -m pip install openpyxl xlrd xlwt xlutils
 python export_summary.py
 ```
 
@@ -134,13 +134,15 @@ python -m unittest -v
 - “默认文件夹”默认使用方案所在文件夹，双击路径框或点击按钮即可修改；
 - 执行前检查文件、工作表、单元格、重复目标和已有内容；
 - 为目标工作簿生成新副本，原文件始终不修改；
-- 支持 `.xls`、`.xlsx`、`.xlsm`，旧版 `.xls` 副本输出为 `.xlsx`。
+- 支持 `.xls`、`.xlsx`、`.xlsm`，映射副本保持目标工作簿原扩展名。
 
 Windows 电脑安装了 Microsoft Excel 时，程序会优先通过 Excel 本身打开完整
 副本，并且只修改目标单元格的值。因此 `.xls`、`.xlsx`、`.xlsm` 的合并单元格、
 字体、颜色、底色、边框、数字格式、行高列宽及页面布局均由 Excel 原生保留。
-如果电脑没有安装 Excel，程序会自动使用 Python 兼容模式；其中 `.xlsx/.xlsm`
-可保留常规样式，旧版 `.xls` 会转换成 `.xlsx`，复杂格式的保真度会降低。
+程序现在按“Microsoft Excel → WPS 表格 → Python 兼容模式”的顺序自动选择
+写入方式。Excel 或 WPS 可用时，由办公软件原生打开副本并只修改单元格值；
+两者均不可用时，`.xls` 使用 `xlutils` 保底并保持原扩展名及常规单元格样式。
+纯 Python 保底方式无法完整保留旧版 `.xls` 中的公式、图表等高级对象。
 
 Excel 方案表固定使用五列：
 

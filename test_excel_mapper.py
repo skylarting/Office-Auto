@@ -4,6 +4,7 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
+import xlrd
 import xlwt
 
 import excel_mapper
@@ -25,6 +26,14 @@ def make_xls(path: Path, sheet_name: str) -> None:
     style = xlwt.easyxf(num_format_str="0")
     sheet.write(1, 0, 12.6, style)
     sheet.write(1, 2, 34.4, style)
+    target_style = xlwt.easyxf(
+        "font: bold on, colour white;"
+        "pattern: pattern solid, fore_colour dark_blue;"
+        "borders: left thin, right thin, top thin, bottom thin;",
+        num_format_str="#,##0.00",
+    )
+    sheet.write(3, 3, None, target_style)
+    sheet.write(3, 4, None, target_style)
     workbook.save(str(path))
 
 
@@ -72,6 +81,42 @@ class ExcelMapperTests(unittest.TestCase):
 
             legacy_reader = excel_mapper.WorkbookReader(xls_path)
             self.assertIsNotNone(legacy_reader.fill_color("数据", "A1"))
+            legacy_reader.close()
+
+    def test_workbook_reader_classifies_cell_types(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            xlsx_path = folder / "类型.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "数据"
+            sheet["A1"] = 12.5
+            sheet["A2"] = "文字"
+            sheet["A3"] = "=A1*2"
+            sheet["A4"].fill = PatternFill(
+                fill_type="solid",
+                fgColor="FFFFFF00",
+            )
+            workbook.save(xlsx_path)
+            workbook.close()
+            reader = excel_mapper.WorkbookReader(xlsx_path)
+            self.assertIn("number", reader.cell_traits("数据", "A1"))
+            self.assertIn("text", reader.cell_traits("数据", "A2"))
+            self.assertIn("formula", reader.cell_traits("数据", "A3"))
+            self.assertIn("fill", reader.cell_traits("数据", "A4"))
+            reader.close()
+
+            xls_path = folder / "类型.xls"
+            legacy = xlwt.Workbook()
+            legacy_sheet = legacy.add_sheet("数据")
+            legacy_sheet.write(0, 0, 12.5)
+            legacy_sheet.write(1, 0, "文字")
+            legacy_sheet.write(2, 0, xlwt.Formula("A1*2"))
+            legacy.save(str(xls_path))
+            legacy_reader = excel_mapper.WorkbookReader(xls_path)
+            self.assertIn("number", legacy_reader.cell_traits("数据", "A1"))
+            self.assertIn("text", legacy_reader.cell_traits("数据", "A2"))
+            self.assertIn("formula", legacy_reader.cell_traits("数据", "A3"))
             legacy_reader.close()
 
     def test_expand_sequence_and_one_to_many(self) -> None:
@@ -212,11 +257,24 @@ class ExcelMapperTests(unittest.TestCase):
                 [rule],
                 output,
             )
-            self.assertEqual(outputs[0].suffix, ".xlsx")
-            copied = load_workbook(outputs[0])
-            self.assertEqual(copied["模板"]["D4"].value, 12.6)
-            self.assertEqual(copied["模板"]["E4"].value, 34.4)
-            copied.close()
+            self.assertEqual(outputs[0].suffix, ".xls")
+            copied = xlrd.open_workbook(
+                outputs[0],
+                formatting_info=True,
+            )
+            copied_sheet = copied.sheet_by_name("模板")
+            self.assertEqual(copied_sheet.cell_value(3, 3), 12.6)
+            self.assertEqual(copied_sheet.cell_value(3, 4), 34.4)
+            for column in (3, 4):
+                xf = copied.xf_list[
+                    copied_sheet.cell(3, column).xf_index
+                ]
+                font = copied.font_list[xf.font_index]
+                self.assertTrue(font.bold)
+                self.assertEqual(xf.background.fill_pattern, 1)
+                self.assertEqual(xf.border.left_line_style, 1)
+                self.assertEqual(copied.format_map[xf.format_key].format_str, "#,##0.00")
+            copied.release_resources()
 
     def test_project_round_trip(self) -> None:
         with TemporaryDirectory() as temp_dir:

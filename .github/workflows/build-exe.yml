@@ -25,7 +25,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install pyinstaller openpyxl xlrd xlwt pywin32
+        run: python -m pip install pyinstaller openpyxl xlrd xlwt xlutils pywin32
 
       - name: Run tests
         run: python -m unittest -v

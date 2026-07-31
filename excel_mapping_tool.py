@@ -71,22 +71,24 @@ class ExcelMappingToolApp(MapperApp):
 
         command_bar = ttk.Frame(container)
         command_bar.pack(fill=X, pady=(0, 10))
-        for text, command in (
-            ("导入映射表", self._load_excel_scheme),
-            ("导出映射表", self._save_excel_scheme),
-        ):
-            ttk.Button(
-                command_bar,
-                text=text,
-                command=command,
-                style="Toolbar.TButton",
-            ).pack(side=LEFT, padx=(0, 8))
+        ttk.Button(
+            command_bar,
+            text="导入映射表",
+            command=self._load_excel_scheme,
+            style="Toolbar.TButton",
+        ).pack(side=LEFT)
         ttk.Button(
             command_bar,
             text="清空所有映射",
             command=self._clear_all_workflow,
             style="Toolbar.TButton",
         ).pack(side=RIGHT)
+        ttk.Button(
+            command_bar,
+            text="导出映射表",
+            command=self._save_excel_scheme,
+            style="Toolbar.TButton",
+        ).pack(side=RIGHT, padx=(0, 8))
 
         default_row = ttk.Frame(container)
         default_row.pack(fill=X, pady=(0, 12))
@@ -144,8 +146,8 @@ class ExcelMappingToolApp(MapperApp):
                 anchor=W,
                 stretch=stretch,
             )
-        self.scheme_tree.tag_configure("source", background="#FBFAF7")
-        self.scheme_tree.tag_configure("target", background="#F2F0EB")
+        self.scheme_tree.tag_configure("group_odd", background="#F2F2F2")
+        self.scheme_tree.tag_configure("group_even", background="#FFFFFF")
         self.scheme_tree.grid(row=0, column=0, sticky="nsew")
         vertical = ttk.Scrollbar(
             table_surface,

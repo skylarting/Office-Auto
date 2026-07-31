@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import re
 import shutil
+import struct
 import sys
 from tkinter import (
     BOTH,
@@ -27,6 +28,8 @@ from tkinter import (
 from typing import Callable
 
 import xlrd
+from xlrd.compdoc import CompDoc
+from xlutils.copy import copy as copy_xls_workbook
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.styles.colors import COLOR_INDEX
@@ -34,7 +37,6 @@ from openpyxl.styles.colors import COLOR_INDEX
 from export_summary import (
     WORKBOOK_SUFFIXES,
     column_letters_to_number,
-    copy_xls_to_xlsx,
     parse_cell_addresses,
     unique_output_path,
     xls_cell_value,
@@ -214,6 +216,7 @@ class WorkbookReader:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.is_xls = path.suffix.lower() == ".xls"
+        self._xls_formula_cache: dict[str, set[tuple[int, int]]] = {}
         if self.is_xls:
             self.xls_book = xlrd.open_workbook(
                 path,
@@ -258,6 +261,13 @@ class WorkbookReader:
             self.value_book[sheet_name][address].value,
             self.format_book[sheet_name][address].number_format,
         )
+
+    def used_dimensions(self, sheet_name: str) -> tuple[int, int]:
+        if self.is_xls:
+            sheet = self.xls_book.sheet_by_name(sheet_name)
+            return sheet.nrows, sheet.ncols
+        sheet = self.format_book[sheet_name]
+        return sheet.max_row, sheet.max_column
 
     @staticmethod
     def _apply_tint(rgb: str, tint: float) -> str:
@@ -313,6 +323,68 @@ class WorkbookReader:
         if tint:
             rgb = self._apply_tint(rgb, tint)
         return f"#{rgb.upper()}"
+
+    def _xls_formula_cells(self, sheet_name: str) -> set[tuple[int, int]]:
+        cached = self._xls_formula_cache.get(sheet_name)
+        if cached is not None:
+            return cached
+        book = self.xls_book
+        sheet = book.sheet_by_name(sheet_name)
+        compound = CompDoc(self.path.read_bytes())
+        stream, _base, stream_length = compound.locate_named_stream("Workbook")
+        if stream is None:
+            stream, _base, stream_length = compound.locate_named_stream("Book")
+        formulas: set[tuple[int, int]] = set()
+        if stream is not None:
+            # xlrd 的工作表偏移量相对于 Workbook 流本身，而
+            # locate_named_stream 返回的字节对象也以该流为坐标。
+            position = book._sh_abs_posn[sheet.number]
+            limit = stream_length
+            while position + 4 <= limit:
+                record_id, record_size = struct.unpack(
+                    "<HH",
+                    bytes(stream[position:position + 4]),
+                )
+                if record_id == 0x0006 and record_size >= 4:
+                    row_index, column_index = struct.unpack(
+                        "<HH",
+                        bytes(stream[position + 4:position + 8]),
+                    )
+                    formulas.add((row_index, column_index))
+                position += 4 + record_size
+                if record_id == 0x000A:
+                    break
+        self._xls_formula_cache[sheet_name] = formulas
+        return formulas
+
+    def cell_traits(self, sheet_name: str, address: str) -> set[str]:
+        traits: set[str] = set()
+        row_index, column_index = split_address(address)
+        if self.is_xls:
+            sheet = self.xls_book.sheet_by_name(sheet_name)
+            if row_index >= sheet.nrows or column_index >= sheet.ncols:
+                return traits
+            cell = sheet.cell(row_index, column_index)
+            if (row_index, column_index) in self._xls_formula_cells(sheet_name):
+                traits.add("formula")
+            elif cell.ctype in (xlrd.XL_CELL_NUMBER, xlrd.XL_CELL_DATE):
+                traits.add("number")
+            elif cell.ctype == xlrd.XL_CELL_TEXT:
+                traits.add("text")
+        else:
+            cell = self.format_book[sheet_name][address]
+            if cell.data_type == "f":
+                traits.add("formula")
+            elif isinstance(cell.value, (int, float)) and not isinstance(
+                cell.value,
+                bool,
+            ):
+                traits.add("number")
+            elif isinstance(cell.value, str):
+                traits.add("text")
+        if self.fill_color(sheet_name, address):
+            traits.add("fill")
+        return traits
 
     def close(self) -> None:
         if self.xls_book is not None:
@@ -404,44 +476,68 @@ def validate_mapping_plan(
 
 
 def output_name_for_target(path: Path) -> str:
-    suffix = ".xlsx" if path.suffix.lower() == ".xls" else path.suffix
-    return f"{path.stem}_已映射{suffix}"
+    return f"{path.stem}_已映射{path.suffix}"
 
 
-def excel_automation_available() -> bool:
+OFFICE_AUTOMATION_PROG_IDS = (
+    ("Microsoft Excel", "Excel.Application"),
+    ("WPS 表格", "KET.Application"),
+    ("WPS 表格", "ET.Application"),
+    ("WPS 表格", "ket.Application"),
+    ("WPS 表格", "et.Application"),
+)
+
+
+def _dispatch_spreadsheet_application(prog_id: str):
+    import win32com.client
+
+    try:
+        return win32com.client.DispatchEx(prog_id)
+    except Exception:
+        return win32com.client.Dispatch(prog_id)
+
+
+def spreadsheet_automation_provider() -> tuple[str, str] | None:
     if sys.platform != "win32":
-        return False
+        return None
     try:
         import pythoncom
-        import win32com.client
     except ImportError:
-        return False
+        return None
     pythoncom.CoInitialize()
-    excel = None
     try:
-        excel = win32com.client.DispatchEx("Excel.Application")
-        return True
-    except Exception:
-        return False
-    finally:
-        if excel is not None:
+        for provider_name, prog_id in OFFICE_AUTOMATION_PROG_IDS:
+            application = None
             try:
-                excel.Quit()
+                application = _dispatch_spreadsheet_application(prog_id)
+                return provider_name, prog_id
             except Exception:
-                pass
+                continue
+            finally:
+                if application is not None:
+                    try:
+                        application.Quit()
+                    except Exception:
+                        pass
+        return None
+    finally:
         pythoncom.CoUninitialize()
 
 
-def execute_mapping_plan_with_excel(
+def excel_automation_available() -> bool:
+    return spreadsheet_automation_provider() is not None
+
+
+def execute_mapping_plan_with_office(
     source_files: list[Path],
     target_files: list[Path],
     rules: list[MappingRule],
     output_folder: Path,
+    provider: tuple[str, str],
     progress: Callable[[int, int, str], None] | None = None,
 ) -> list[Path]:
-    """Write values through desktop Excel so workbook formatting stays intact."""
+    """Write values through desktop Excel/WPS so formatting stays intact."""
     import pythoncom
-    import win32com.client
 
     expanded, _warnings = validate_mapping_plan(
         source_files,
@@ -461,24 +557,28 @@ def execute_mapping_plan_with_excel(
     excel = None
     source_books: dict[str, object] = {}
     target_books: dict[str, object] = {}
+    provider_name, prog_id = provider
     try:
-        excel = win32com.client.DispatchEx("Excel.Application")
+        excel = _dispatch_spreadsheet_application(prog_id)
         excel.Visible = False
         excel.DisplayAlerts = False
-        excel.ScreenUpdating = False
+        try:
+            excel.ScreenUpdating = False
+        except Exception:
+            pass
         for source_path in source_files:
             key = str(source_path.resolve())
             source_books[key] = excel.Workbooks.Open(
                 str(source_path.resolve()),
-                UpdateLinks=0,
-                ReadOnly=True,
+                0,
+                True,
             )
         for target_path in target_files:
             key = str(target_path.resolve())
             target_books[key] = excel.Workbooks.Open(
                 str(output_paths[key].resolve()),
-                UpdateLinks=0,
-                ReadOnly=False,
+                0,
+                False,
             )
 
         total = len(expanded)
@@ -487,7 +587,8 @@ def execute_mapping_plan_with_excel(
                 progress(
                     index - 1,
                     total,
-                    f"正在无损写入：{Path(mapping.source_file).name}/"
+                    f"正在通过{provider_name}无损写入："
+                    f"{Path(mapping.source_file).name}/"
                     f"{mapping.source_cell} → "
                     f"{Path(mapping.target_file).name}/{mapping.target_cell}",
                 )
@@ -528,6 +629,37 @@ def execute_mapping_plan_with_excel(
         pythoncom.CoUninitialize()
 
 
+def _write_xls_value_preserving_style(
+    read_book,
+    write_book,
+    sheet_name: str,
+    address: str,
+    value: object,
+) -> None:
+    sheet_index = read_book.sheet_names().index(sheet_name)
+    read_sheet = read_book.sheet_by_index(sheet_index)
+    write_sheet = write_book.get_sheet(sheet_index)
+    row_index, column_index = split_address(address)
+    old_xf_index: int | None = None
+    if row_index < read_sheet.nrows and column_index < read_sheet.ncols:
+        old_xf_index = read_sheet.cell(row_index, column_index).xf_index
+    try:
+        existing = (
+            write_sheet._Worksheet__rows[row_index]
+            ._Row__cells[column_index]
+        )
+        old_xf_index = existing.xf_idx
+    except (KeyError, AttributeError):
+        pass
+    write_sheet.write(row_index, column_index, value)
+    if old_xf_index is not None:
+        written = (
+            write_sheet._Worksheet__rows[row_index]
+            ._Row__cells[column_index]
+        )
+        written.xf_idx = old_xf_index
+
+
 def execute_mapping_plan(
     source_files: list[Path],
     target_files: list[Path],
@@ -535,12 +667,14 @@ def execute_mapping_plan(
     output_folder: Path,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> list[Path]:
-    if excel_automation_available():
-        return execute_mapping_plan_with_excel(
+    provider = spreadsheet_automation_provider()
+    if provider is not None:
+        return execute_mapping_plan_with_office(
             source_files,
             target_files,
             rules,
             output_folder,
+            provider,
             progress,
         )
     expanded, _warnings = validate_mapping_plan(
@@ -551,6 +685,7 @@ def execute_mapping_plan(
     output_folder.mkdir(parents=True, exist_ok=True)
     readers: dict[str, WorkbookReader] = {}
     target_books: dict[str, object] = {}
+    target_xls_books: dict[str, tuple[object, object]] = {}
     output_paths: dict[str, Path] = {}
     try:
         for target_path in target_files:
@@ -559,7 +694,13 @@ def execute_mapping_plan(
                 output_folder / output_name_for_target(target_path)
             )
             if target_path.suffix.lower() == ".xls":
-                workbook = copy_xls_to_xlsx(target_path)
+                read_book = xlrd.open_workbook(
+                    target_path,
+                    formatting_info=True,
+                    on_demand=False,
+                )
+                workbook = copy_xls_workbook(read_book)
+                target_xls_books[key] = (read_book, workbook)
             else:
                 shutil.copy2(target_path, output_path)
                 workbook = load_workbook(
@@ -588,26 +729,53 @@ def execute_mapping_plan(
 
             target_key = str(Path(mapping.target_file).resolve())
             target_book = target_books[target_key]
-            if mapping.target_sheet not in target_book.sheetnames:
-                raise ValueError(
-                    f"{Path(mapping.target_file).name} 中不存在工作表"
-                    f"“{mapping.target_sheet}”。"
+            if target_key in target_xls_books:
+                read_book, write_book = target_xls_books[target_key]
+                if mapping.target_sheet not in read_book.sheet_names():
+                    raise ValueError(
+                        f"{Path(mapping.target_file).name} 中不存在工作表"
+                        f"“{mapping.target_sheet}”。"
+                    )
+                _write_xls_value_preserving_style(
+                    read_book,
+                    write_book,
+                    mapping.target_sheet,
+                    mapping.target_cell,
+                    cell_data.value,
                 )
-            target_cell = target_book[mapping.target_sheet][mapping.target_cell]
-            target_cell.value = cell_data.value
+            else:
+                if mapping.target_sheet not in target_book.sheetnames:
+                    raise ValueError(
+                        f"{Path(mapping.target_file).name} 中不存在工作表"
+                        f"“{mapping.target_sheet}”。"
+                    )
+                target_cell = target_book[
+                    mapping.target_sheet
+                ][mapping.target_cell]
+                target_cell.value = cell_data.value
             if progress:
                 progress(index, total, f"已完成 {index}/{total} 项映射")
 
         for key, workbook in target_books.items():
             workbook.save(output_paths[key])
-            workbook.close()
+            if key in target_xls_books:
+                target_xls_books[key][0].release_resources()
+            else:
+                workbook.close()
         target_books.clear()
+        target_xls_books.clear()
         return list(output_paths.values())
     finally:
         for reader in readers.values():
             reader.close()
-        for workbook in target_books.values():
-            workbook.close()
+        for key, workbook in target_books.items():
+            if key in target_xls_books:
+                try:
+                    target_xls_books[key][0].release_resources()
+                except Exception:
+                    pass
+            else:
+                workbook.close()
 
 
 def save_mapping_project(
@@ -1078,6 +1246,7 @@ class CellPickerDialog:
         self.selected = set(initial_cells)
         self.anchor: tuple[int, int] | None = None
         self.cell_display_cache: dict[str, tuple[object, str | None]] = {}
+        self.cell_traits_cache: dict[str, set[str]] = {}
         self.rows = max(
             50,
             max((cell_sort_key(item)[0] + 1 for item in initial_cells), default=0),
@@ -1123,6 +1292,23 @@ class CellPickerDialog:
             container,
             text="单击选择或取消；按住鼠标拖动可选择连续区域。",
         ).pack(anchor=W, pady=(6, 8))
+
+        quick_select = ttk.Frame(container)
+        quick_select.pack(fill=X, pady=(0, 8))
+        ttk.Label(quick_select, text="批量选择：").pack(side=LEFT)
+        for text, command in (
+            ("全选", self._select_all),
+            ("反选", self._invert_selection),
+            ("数值型", lambda: self._toggle_trait("number")),
+            ("文字型", lambda: self._toggle_trait("text")),
+            ("公式型", lambda: self._toggle_trait("formula")),
+            ("带底色", lambda: self._toggle_trait("fill")),
+        ):
+            ttk.Button(
+                quick_select,
+                text=text,
+                command=command,
+            ).pack(side=LEFT, padx=(0, 6))
 
         table = ttk.Frame(container)
         table.pack(fill=BOTH, expand=True)
@@ -1359,6 +1545,49 @@ class CellPickerDialog:
             if row < self.rows and column < self.columns:
                 self._refresh_cell(row, column)
         self._update_selected_text()
+
+    def _used_addresses(self) -> list[str]:
+        row_count, column_count = self.reader.used_dimensions(self.sheet_name)
+        return [
+            f"{column_number_to_letters(column + 1)}{row + 1}"
+            for column in range(column_count)
+            for row in range(row_count)
+        ]
+
+    def _refresh_addresses(self, addresses) -> None:
+        for address in addresses:
+            row, column = cell_sort_key(address)
+            if row < self.rows and column < self.columns:
+                self._refresh_cell(row, column)
+        self._update_selected_text()
+
+    def _toggle_addresses(self, addresses: set[str]) -> None:
+        if not addresses:
+            return
+        if addresses.issubset(self.selected):
+            self.selected.difference_update(addresses)
+        else:
+            self.selected.update(addresses)
+        self._refresh_addresses(addresses)
+
+    def _select_all(self) -> None:
+        self._toggle_addresses(set(self._used_addresses()))
+
+    def _invert_selection(self) -> None:
+        addresses = set(self._used_addresses())
+        self.selected.symmetric_difference_update(addresses)
+        self._refresh_addresses(addresses)
+
+    def _toggle_trait(self, trait: str) -> None:
+        matches: set[str] = set()
+        for address in self._used_addresses():
+            traits = self.cell_traits_cache.get(address)
+            if traits is None:
+                traits = self.reader.cell_traits(self.sheet_name, address)
+                self.cell_traits_cache[address] = traits
+            if trait in traits:
+                matches.add(address)
+        self._toggle_addresses(matches)
 
     def _update_selected_text(self) -> None:
         ordered = sorted(self.selected, key=cell_column_sort_key)
@@ -2017,6 +2246,8 @@ class MapperApp:
             )
         self.scheme_tree.tag_configure("source", background="#DDEBF7")
         self.scheme_tree.tag_configure("target", background="#E2F0D9")
+        self.scheme_tree.tag_configure("group_odd", background="#F2F2F2")
+        self.scheme_tree.tag_configure("group_even", background="#FFFFFF")
         self.scheme_tree.grid(row=0, column=0, sticky="nsew")
         scheme_vertical = ttk.Scrollbar(
             scheme_table,
@@ -3139,6 +3370,7 @@ class MapperApp:
         base = self._default_scheme_base_folder()
         for index, rule in enumerate(self.scheme_rules):
             group = index + 1
+            group_tag = "group_odd" if group % 2 else "group_even"
             source_file = format_project_path(Path(rule.source_file), base)
             target_file = (
                 format_project_path(Path(rule.target_file), base)
@@ -3156,7 +3388,7 @@ class MapperApp:
                     rule.source_sheet,
                     format_cell_addresses(rule.source_cells),
                 ),
-                tags=("source",),
+                tags=(group_tag,),
             )
             target_cells = (
                 "同位置"
@@ -3174,22 +3406,25 @@ class MapperApp:
                     rule.target_sheet,
                     target_cells,
                 ),
-                tags=("target",),
+                tags=(group_tag,),
             )
         next_group = len(self.scheme_rules) + 1
+        next_group_tag = (
+            "group_odd" if next_group % 2 else "group_even"
+        )
         self.scheme_tree.insert(
             "",
             END,
             iid="scheme:new:source",
             values=(next_group, "来源", "", "", ""),
-            tags=("source",),
+            tags=(next_group_tag,),
         )
         self.scheme_tree.insert(
             "",
             END,
             iid="scheme:new:target",
             values=(next_group, "目标", "", "", "同位置"),
-            tags=("target",),
+            tags=(next_group_tag,),
         )
 
     def _save_excel_scheme(self) -> None:
