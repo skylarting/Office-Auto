@@ -64,6 +64,31 @@ class ExcelMapperTests(unittest.TestCase):
             self.assertIsNone(sheet["E3"].value)
             workbook.close()
 
+    def test_exported_scheme_alternates_fill_by_mapping_group(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            path = folder / "交替底色.xlsx"
+            rules = [
+                excel_mapper.MappingRule(
+                    "来源1.xlsx", "表1", ["A1"],
+                    "目标1.xlsx", "表1", ["A1"],
+                    excel_mapper.MODE_MANUAL,
+                ),
+                excel_mapper.MappingRule(
+                    "来源2.xlsx", "表2", ["B2"],
+                    "目标2.xlsx", "表2", ["B2"],
+                    excel_mapper.MODE_MANUAL,
+                ),
+            ]
+            excel_mapper.save_excel_mapping_scheme(path, rules, folder)
+            workbook = load_workbook(path)
+            sheet = workbook["映射方案"]
+            self.assertEqual(sheet["A2"].fill.fgColor.rgb[-6:], "F2F2F2")
+            self.assertEqual(sheet["A3"].fill.fgColor.rgb[-6:], "F2F2F2")
+            self.assertEqual(sheet["A4"].fill.fgColor.rgb[-6:], "FFFFFF")
+            self.assertEqual(sheet["A5"].fill.fgColor.rgb[-6:], "FFFFFF")
+            workbook.close()
+
     def test_xls_formula_risk_counts_source_and_target_formulas(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)
@@ -425,7 +450,7 @@ class ExcelMapperTests(unittest.TestCase):
                 [cell.value for cell in sheet[3]],
                 [1, "目标", "目标.xlsx", "模板", "同位置"],
             )
-            self.assertNotEqual(
+            self.assertEqual(
                 sheet["A2"].fill.fgColor.rgb,
                 sheet["A3"].fill.fgColor.rgb,
             )

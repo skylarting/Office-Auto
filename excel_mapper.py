@@ -947,8 +947,8 @@ def save_blank_excel_mapping_template(path: Path) -> None:
 
 def format_excel_mapping_sheet(sheet) -> None:
     header_fill = PatternFill("solid", fgColor="1F4E78")
-    source_fill = PatternFill("solid", fgColor="DDEBF7")
-    target_fill = PatternFill("solid", fgColor="E2F0D9")
+    gray_group_fill = PatternFill("solid", fgColor="F2F2F2")
+    white_group_fill = PatternFill("solid", fgColor="FFFFFF")
     thin = Side(style="thin", color="B7C9D6")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     for cell in sheet[1]:
@@ -956,8 +956,19 @@ def format_excel_mapping_sheet(sheet) -> None:
         cell.font = Font(color="FFFFFF", bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = border
-    for row in sheet.iter_rows(min_row=2):
-        fill = source_fill if row[1].value == "来源" else target_fill
+    for row_number, row in enumerate(
+        sheet.iter_rows(min_row=2),
+        start=2,
+    ):
+        try:
+            group_number = int(row[0].value)
+        except (TypeError, ValueError):
+            group_number = (row_number - 2) // 2 + 1
+        fill = (
+            gray_group_fill
+            if group_number % 2
+            else white_group_fill
+        )
         for cell in row:
             cell.fill = fill
             cell.border = border
