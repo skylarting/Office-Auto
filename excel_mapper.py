@@ -889,6 +889,8 @@ def load_mapping_project(
 SCHEME_HEADERS = ("映射组", "类型", "工作簿", "工作表", "单元格")
 TYPED_SCHEME_HEADERS = ("类型", "工作簿", "工作表", "单元格")
 COMPACT_SCHEME_HEADERS = ("工作簿", "工作表", "单元格")
+UNSELECTED_WORKBOOK_OPTION = "（未选择工作簿）"
+UNSELECTED_SHEET_OPTION = "（未选择工作表）"
 
 
 def save_excel_mapping_scheme(
@@ -3205,8 +3207,12 @@ class MapperApp:
                 except OSError:
                     candidates = []
             return (
-                format_project_path(path, base) if path is not None else "",
-                candidates,
+                (
+                    format_project_path(path, base)
+                    if path is not None
+                    else UNSELECTED_WORKBOOK_OPTION
+                ),
+                [UNSELECTED_WORKBOOK_OPTION, *candidates],
             )
         if column == "#4":
             path_text = (
@@ -3224,7 +3230,10 @@ class MapperApp:
                 )
             except Exception:
                 names = []
-            return current, names
+            return (
+                current or UNSELECTED_SHEET_OPTION,
+                [UNSELECTED_SHEET_OPTION, *names],
+            )
         cells = rule.source_cells if is_source else rule.target_cells
         if not is_source and rule.source_cells and cells == rule.source_cells:
             return "同位置", []
@@ -3390,8 +3399,17 @@ class MapperApp:
             rule = self.scheme_rules[index]
             is_source = kind == "source"
             if column == "#3":
+                if value == UNSELECTED_WORKBOOK_OPTION:
+                    if is_source:
+                        rule.source_file = ""
+                    else:
+                        rule.target_file = ""
+                    self._refresh_scheme_tree()
+                    self.scheme_tree.selection_set(iid)
+                    self.scheme_tree.focus(iid)
+                    return "break"
                 if not value:
-                    raise ValueError("工作簿不能为空。")
+                    raise ValueError("请选择工作簿，或选择“未选择工作簿”。")
                 path = resolve_project_path(
                     value,
                     self._default_scheme_base_folder() or Path.cwd(),
@@ -3421,8 +3439,17 @@ class MapperApp:
                         else:
                             rule.target_sheet = selected_sheet
             elif column == "#4":
+                if value == UNSELECTED_SHEET_OPTION:
+                    if is_source:
+                        rule.source_sheet = ""
+                    else:
+                        rule.target_sheet = ""
+                    self._refresh_scheme_tree()
+                    self.scheme_tree.selection_set(iid)
+                    self.scheme_tree.focus(iid)
+                    return "break"
                 if not value:
-                    raise ValueError("工作表不能为空。")
+                    raise ValueError("请选择工作表，或选择“未选择工作表”。")
                 if is_source:
                     rule.source_sheet = value
                 else:
