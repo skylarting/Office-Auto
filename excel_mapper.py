@@ -2994,6 +2994,18 @@ class MapperApp:
         self._scheme_single_click_after = None
         if column == "#5":
             self._pick_scheme_cells(iid)
+        elif column == "#3":
+            base = self._default_scheme_base_folder()
+            candidates = []
+            if base is not None and base.is_dir():
+                try:
+                    candidates = workbook_files_in_folder(base)
+                except OSError:
+                    candidates = []
+            if candidates:
+                self._open_scheme_editor(iid, column, open_dropdown=True)
+            else:
+                self._browse_scheme_workbook(iid)
         else:
             self._open_scheme_editor(iid, column, open_dropdown=True)
 
@@ -3419,7 +3431,7 @@ class MapperApp:
                 tags=(group_tag,),
             )
             target_cells = (
-                "默认同位置（跟随来源）；单击可修改"
+                "默认同位置"
                 if not rule.source_cells and not rule.target_cells
                 else (
                     "同位置（跟随来源）；单击可修改"
@@ -3471,7 +3483,7 @@ class MapperApp:
                 "目标",
                 workbook_hint,
                 sheet_hint,
-                "默认同位置（跟随来源）；单击可修改",
+                "默认同位置",
             ),
             tags=(next_group_tag,),
         )
