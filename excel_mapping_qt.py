@@ -645,7 +645,7 @@ class ExcelMappingQtWindow(QMainWindow):
         mapping_layout.addWidget(self.table, 1)
 
         self.hint = QLabel(
-            "快捷键：Ctrl/⌘+C、Ctrl/⌘+V、Delete/⌘+Delete；支持右击操作。"
+            "快捷键：Ctrl+C、Ctrl+V、Delete；支持右击操作。"
         )
         self.hint.setObjectName("secondaryText")
         self.hint.setWordWrap(True)
@@ -678,17 +678,10 @@ class ExcelMappingQtWindow(QMainWindow):
         execution_layout.addLayout(actions)
         layout.addWidget(execution_group)
 
-        for sequence in (
-            QKeySequence.Delete,
-            QKeySequence("Meta+Backspace"),
-            QKeySequence("Meta+Delete"),
-        ):
-            delete_shortcut = QShortcut(sequence, self)
-            delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-            delete_shortcut.activated.connect(
-                self.delete_selected_groups
-            )
-            self._shortcuts.append(delete_shortcut)
+        delete_shortcut = QShortcut(QKeySequence.Delete, self)
+        delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        delete_shortcut.activated.connect(self.delete_selected_groups)
+        self._shortcuts.append(delete_shortcut)
         copy_shortcut = QShortcut(QKeySequence.Copy, self)
         copy_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         copy_shortcut.activated.connect(self.copy_selection)
@@ -1437,8 +1430,8 @@ class ExcelMappingQtWindow(QMainWindow):
             "单击工作簿/工作表：从菜单选择或输入\n"
             "单击单元格：直接打开单元格选择窗口\n"
             "单元格选择窗口可手动输入地址，并可选择按点击顺序或固定顺序排列\n\n"
-            "Delete/⌘+Delete：删除选中映射组\n"
-            "Ctrl/⌘+C、Ctrl/⌘+V：根据选中的单行或整组自动复制粘贴\n\n"
+            "Delete：删除选中映射组\n"
+            "Ctrl+C、Ctrl+V：根据选中的单行或整组自动复制粘贴\n\n"
             "导入映射表支持：\n"
             "三列：工作簿、工作表、单元格（来源/目标交替）\n"
             "四列：类型、工作簿、工作表、单元格\n"
