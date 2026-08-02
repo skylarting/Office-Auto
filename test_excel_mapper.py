@@ -134,6 +134,26 @@ class ExcelMapperTests(unittest.TestCase):
             )
             workbook.close()
 
+    def test_exported_scheme_instructions_explain_supported_layouts(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            path = folder / "填写说明.xlsx"
+            excel_mapper.save_excel_mapping_scheme(path, [], folder)
+
+            workbook = load_workbook(path, data_only=True)
+            sheet = workbook["填写说明"]
+            text = "\n".join(
+                str(sheet.cell(row, 1).value or "")
+                for row in range(1, sheet.max_row + 1)
+            )
+            self.assertIn("五列表头", text)
+            self.assertIn("四列表头", text)
+            self.assertIn("三列表头", text)
+            self.assertIn("背景颜色可以不设置", text)
+            self.assertIn("不依赖背景颜色、字体、边框或对齐方式", text)
+            self.assertIn("第1行来源、第2行目标", text)
+            workbook.close()
+
     def test_xls_formula_risk_counts_source_and_target_formulas(self) -> None:
         with TemporaryDirectory() as temp_dir:
             folder = Path(temp_dir)

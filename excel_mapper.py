@@ -891,6 +891,31 @@ TYPED_SCHEME_HEADERS = ("类型", "工作簿", "工作表", "单元格")
 COMPACT_SCHEME_HEADERS = ("工作簿", "工作表", "单元格")
 UNSELECTED_WORKBOOK_OPTION = "（未选择工作簿）"
 UNSELECTED_SHEET_OPTION = "（未选择工作表）"
+EXCEL_SCHEME_INSTRUCTIONS = (
+    "Excel 单元格映射方案填写说明",
+    "【一、支持的表头格式】",
+    "1. 五列表头：映射组、类型、工作簿、工作表、单元格。",
+    "   同一映射组填写两行，类型分别为“来源”和“目标”；映射组可使用连续数字。",
+    "2. 四列表头：类型、工作簿、工作表、单元格。",
+    "   不用填写映射组；程序从每一行“来源”开始建立新组，并将下一行“目标”配对到该组。",
+    "3. 三列表头：工作簿、工作表、单元格。",
+    "   不用填写映射组和类型；程序按非空行顺序配对：第1行来源、第2行目标、第3行来源、第4行目标，以此类推。",
+    "4. 表头名称必须使用以上文字，顺序也必须保持一致；空白数据行会被忽略。",
+    "【二、工作簿和工作表】",
+    "1. 工作簿可填写绝对路径，也可只填写文件名或相对路径；相对路径以映射表所在文件夹为基准。",
+    "2. 工作表名称应与工作簿中的实际名称一致。",
+    "3. 只有来源行、暂时没有目标行的映射也可以导入；开始映射前必须在程序中补齐目标工作簿和目标工作表。",
+    "【三、单元格写法】",
+    "1. 单个单元格：A1；多个单元格：A1,B3,D5（使用英文逗号分隔）。",
+    "2. 连续范围：A1-A3；矩形范围：A1-B3，表示 A1 到 B3 范围内的全部单元格。",
+    "3. 目标单元格可填写“同位置”，表示按来源单元格地址写入目标工作表的相同位置。",
+    "4. 来源和目标数量相同时按填写顺序一一对应；一个来源单元格也可以写入多个目标单元格。",
+    "5. 单元格的填写顺序会影响映射顺序，请不要随意排序。",
+    "【四、格式和颜色】",
+    "1. 程序导入时只读取表头和单元格文字内容，不依赖背景颜色、字体、边框或对齐方式。",
+    "2. 背景颜色可以不设置；灰白交替底色仅用于方便查看映射组，不影响导入和执行。",
+    "3. 可自行修改显示样式，但请勿合并数据区域的单元格，也不要修改规定的表头名称和列顺序。",
+)
 
 
 def save_excel_mapping_scheme(
@@ -936,12 +961,22 @@ def save_excel_mapping_scheme(
         )
     format_excel_mapping_sheet(sheet)
     instructions = workbook.create_sheet("填写说明")
-    instructions.append(["Excel 单元格映射方案填写说明"])
-    instructions.append(["每个映射组必须包含一行“来源”和一行“目标”。"])
-    instructions.append(["工作簿可填写绝对路径，或相对于方案文件所在文件夹的路径。"])
-    instructions.append(["单元格支持 A1、A1-A3、A1-B3；目标可填写“同位置”。"])
-    instructions.column_dimensions["A"].width = 88
+    for text in EXCEL_SCHEME_INSTRUCTIONS:
+        instructions.append([text])
+    instructions.column_dimensions["A"].width = 112
     instructions["A1"].font = Font(bold=True, size=14)
+    instructions["A1"].fill = PatternFill("solid", fgColor="EEF2F6")
+    instructions["A1"].alignment = Alignment(vertical="center")
+    instructions.row_dimensions[1].height = 28
+    for row_number in range(2, instructions.max_row + 1):
+        cell = instructions.cell(row_number, 1)
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        instructions.row_dimensions[row_number].height = 22
+        if str(cell.value).startswith("【"):
+            cell.font = Font(bold=True, color="18212B")
+            cell.fill = PatternFill("solid", fgColor="F3F6FA")
+            instructions.row_dimensions[row_number].height = 24
+    instructions.freeze_panes = "A2"
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(path)
     workbook.close()
