@@ -50,7 +50,7 @@ class ExcelMappingQtTests(unittest.TestCase):
 
         self.assertEqual(rule.target_sheet, "用户选择")
 
-    def test_default_output_folder_is_created_under_base_folder(self) -> None:
+    def test_default_output_folder_is_deferred_until_mapping(self) -> None:
         class FakeEdit:
             def __init__(self) -> None:
                 self.text = ""
@@ -72,7 +72,7 @@ class ExcelMappingQtTests(unittest.TestCase):
 
             expected = Path(folder) / "映射结果"
             self.assertEqual(window.output_folder, expected)
-            self.assertTrue(expected.is_dir())
+            self.assertFalse(expected.exists())
             self.assertTrue(window.output_edit.text)
 
 

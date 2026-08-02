@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -752,18 +753,18 @@ class ExcelMappingQtWindow(QMainWindow):
         layout.addWidget(mapping_group, 1)
 
         execution_group = QGroupBox("输出与执行")
-        execution_layout = QVBoxLayout(execution_group)
+        execution_layout = QGridLayout(execution_group)
         execution_layout.setContentsMargins(12, 12, 12, 8)
-        execution_layout.setSpacing(4)
+        execution_layout.setHorizontalSpacing(12)
+        execution_layout.setVerticalSpacing(2)
         self.status_label = QLabel("尚未检查。")
-        execution_layout.addWidget(self.status_label)
+        execution_layout.addWidget(self.status_label, 0, 0)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        execution_layout.addWidget(self.progress)
+        execution_layout.addWidget(self.progress, 1, 0)
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        actions.addStretch(1)
         run = QPushButton("开始映射")
         run.setObjectName("primaryButton")
         run.setDefault(True)
@@ -772,7 +773,8 @@ class ExcelMappingQtWindow(QMainWindow):
         close = QPushButton("退出")
         close.clicked.connect(self.close)
         actions.addWidget(close)
-        execution_layout.addLayout(actions)
+        execution_layout.addLayout(actions, 0, 1, 2, 1)
+        execution_layout.setColumnStretch(0, 1)
         layout.addWidget(execution_group)
 
         delete_shortcut = QShortcut(QKeySequence.Delete, self.table)
@@ -1397,17 +1399,6 @@ class ExcelMappingQtWindow(QMainWindow):
         if self.base_folder is None:
             return
         output_folder = self.base_folder / "映射结果"
-        try:
-            output_folder.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            self.output_folder = None
-            self.output_edit.clear()
-            QMessageBox.warning(
-                self,
-                "无法创建输出文件夹",
-                f"无法创建默认输出文件夹：\n{output_folder}\n\n{exc}",
-            )
-            return
         self.output_folder = output_folder
         self.output_edit.setText(native_path_text(output_folder))
 
@@ -1588,6 +1579,17 @@ class ExcelMappingQtWindow(QMainWindow):
                     != QMessageBox.StandardButton.Yes
                 ):
                     return
+
+            try:
+                self.output_folder.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                QMessageBox.critical(
+                    self,
+                    "无法创建输出文件夹",
+                    f"无法创建输出文件夹：\n"
+                    f"{self.output_folder}\n\n{exc}",
+                )
+                return
 
             def progress(current: int, total: int, message: str) -> None:
                 self.progress.setValue(
