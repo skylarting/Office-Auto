@@ -961,16 +961,30 @@ def save_blank_excel_mapping_template(path: Path) -> None:
 
 
 def format_excel_mapping_sheet(sheet) -> None:
-    header_fill = PatternFill("solid", fgColor="1F4E78")
-    gray_group_fill = PatternFill("solid", fgColor="F2F2F2")
+    # Keep exported schemes visually consistent with the Qt mapping table.
+    header_fill = PatternFill("solid", fgColor="EEF2F6")
+    gray_group_fill = PatternFill("solid", fgColor="F3F6FA")
     white_group_fill = PatternFill("solid", fgColor="FFFFFF")
-    thin = Side(style="thin", color="B7C9D6")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_side = Side(style="thin", color="D9DEE5")
+    data_side = Side(style="thin", color="E5E9EE")
+    header_border = Border(
+        left=header_side,
+        right=header_side,
+        top=header_side,
+        bottom=header_side,
+    )
+    data_border = Border(
+        left=data_side,
+        right=data_side,
+        top=data_side,
+        bottom=data_side,
+    )
     for cell in sheet[1]:
         cell.fill = header_fill
-        cell.font = Font(color="FFFFFF", bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = border
+        cell.font = Font(color="18212B", bold=True)
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+        cell.border = header_border
+    sheet.row_dimensions[1].height = 26
     for row_number, row in enumerate(
         sheet.iter_rows(min_row=2),
         start=2,
@@ -984,10 +998,14 @@ def format_excel_mapping_sheet(sheet) -> None:
             if group_number % 2
             else white_group_fill
         )
-        for cell in row:
+        for column_number, cell in enumerate(row, start=1):
             cell.fill = fill
-            cell.border = border
-            cell.alignment = Alignment(vertical="center")
+            cell.border = data_border
+            cell.alignment = Alignment(
+                horizontal="center" if column_number <= 2 else "left",
+                vertical="center",
+            )
+        sheet.row_dimensions[row_number].height = 22
     for column, width in zip("ABCDE", (10, 10, 42, 24, 28)):
         sheet.column_dimensions[column].width = width
     sheet.freeze_panes = "A2"

@@ -119,10 +119,19 @@ class ExcelMapperTests(unittest.TestCase):
             excel_mapper.save_excel_mapping_scheme(path, rules, folder)
             workbook = load_workbook(path)
             sheet = workbook["映射方案"]
-            self.assertEqual(sheet["A2"].fill.fgColor.rgb[-6:], "F2F2F2")
-            self.assertEqual(sheet["A3"].fill.fgColor.rgb[-6:], "F2F2F2")
+            self.assertEqual(sheet["A1"].fill.fgColor.rgb[-6:], "EEF2F6")
+            self.assertEqual(sheet["A1"].font.color.rgb[-6:], "18212B")
+            self.assertTrue(sheet["A1"].font.bold)
+            self.assertEqual(
+                sheet["A1"].border.bottom.color.rgb[-6:], "D9DEE5"
+            )
+            self.assertEqual(sheet["A2"].fill.fgColor.rgb[-6:], "F3F6FA")
+            self.assertEqual(sheet["A3"].fill.fgColor.rgb[-6:], "F3F6FA")
             self.assertEqual(sheet["A4"].fill.fgColor.rgb[-6:], "FFFFFF")
             self.assertEqual(sheet["A5"].fill.fgColor.rgb[-6:], "FFFFFF")
+            self.assertEqual(
+                sheet["A2"].border.bottom.color.rgb[-6:], "E5E9EE"
+            )
             workbook.close()
 
     def test_xls_formula_risk_counts_source_and_target_formulas(self) -> None:
