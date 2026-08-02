@@ -547,6 +547,7 @@ class ExcelMappingQtWindow(QMainWindow):
         self.clipboard_scope = ""
         self.base_folder: Path | None = None
         self.output_folder: Path | None = None
+        self._output_folder_manually_selected = False
         self._refreshing = False
         self._shortcuts: list[QShortcut] = []
 
@@ -752,18 +753,16 @@ class ExcelMappingQtWindow(QMainWindow):
 
         execution_group = QGroupBox("输出与执行")
         execution_layout = QVBoxLayout(execution_group)
-        execution_layout.setContentsMargins(14, 18, 14, 12)
-        status_line = QHBoxLayout()
+        execution_layout.setContentsMargins(12, 12, 12, 8)
+        execution_layout.setSpacing(4)
         self.status_label = QLabel("尚未检查。")
-        status_line.addWidget(self.status_label, 1)
+        execution_layout.addWidget(self.status_label)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setMaximumWidth(280)
-        status_line.addWidget(self.progress)
-        execution_layout.addLayout(status_line)
-
+        execution_layout.addWidget(self.progress)
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         actions.addStretch(1)
         run = QPushButton("开始映射")
         run.setObjectName("primaryButton")
@@ -1390,12 +1389,27 @@ class ExcelMappingQtWindow(QMainWindow):
         if selected:
             self.base_folder = Path(selected)
             self.base_edit.setText(native_path_text(selected))
-            if self.output_folder is None:
-                self.output_folder = self.base_folder / "映射结果"
-                self.output_edit.setText(
-                    native_path_text(self.output_folder)
-                )
+            if not self._output_folder_manually_selected:
+                self._set_default_output_folder()
             self.refresh_table()
+
+    def _set_default_output_folder(self) -> None:
+        if self.base_folder is None:
+            return
+        output_folder = self.base_folder / "映射结果"
+        try:
+            output_folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.output_folder = None
+            self.output_edit.clear()
+            QMessageBox.warning(
+                self,
+                "无法创建输出文件夹",
+                f"无法创建默认输出文件夹：\n{output_folder}\n\n{exc}",
+            )
+            return
+        self.output_folder = output_folder
+        self.output_edit.setText(native_path_text(output_folder))
 
     def choose_output_folder(self) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -1405,6 +1419,7 @@ class ExcelMappingQtWindow(QMainWindow):
         )
         if selected:
             self.output_folder = Path(selected)
+            self._output_folder_manually_selected = True
             self.output_edit.setText(native_path_text(selected))
 
     def import_scheme(self) -> None:
@@ -1442,6 +1457,8 @@ class ExcelMappingQtWindow(QMainWindow):
             return
         self.base_folder = Path(selected).parent
         self.base_edit.setText(native_path_text(self.base_folder))
+        if not self._output_folder_manually_selected:
+            self._set_default_output_folder()
         self.refresh_table()
 
     def export_scheme(self) -> None:

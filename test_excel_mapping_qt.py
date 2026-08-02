@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 from excel_mapper import MappingRule, MODE_MANUAL
 from excel_mapping_qt import ExcelMappingQtWindow
@@ -46,6 +49,31 @@ class ExcelMappingQtTests(unittest.TestCase):
         )
 
         self.assertEqual(rule.target_sheet, "用户选择")
+
+    def test_default_output_folder_is_created_under_base_folder(self) -> None:
+        class FakeEdit:
+            def __init__(self) -> None:
+                self.text = ""
+
+            def setText(self, value: str) -> None:
+                self.text = value
+
+            def clear(self) -> None:
+                self.text = ""
+
+        with TemporaryDirectory() as folder:
+            window = SimpleNamespace(
+                base_folder=Path(folder),
+                output_folder=None,
+                output_edit=FakeEdit(),
+            )
+
+            ExcelMappingQtWindow._set_default_output_folder(window)
+
+            expected = Path(folder) / "映射结果"
+            self.assertEqual(window.output_folder, expected)
+            self.assertTrue(expected.is_dir())
+            self.assertTrue(window.output_edit.text)
 
 
 if __name__ == "__main__":
