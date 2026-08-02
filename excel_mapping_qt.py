@@ -84,6 +84,7 @@ from excel_mapper import (
     MODE_MANUAL,
     MappingRule,
     WorkbookReader,
+    best_name_match,
     execute_mapping_plan,
     expand_rules,
     format_cell_addresses,
@@ -1017,6 +1018,7 @@ class ExcelMappingQtWindow(QMainWindow):
             rule.source_file = value
         else:
             rule.target_file = value
+            rule._target_sheet_manually_selected = False
         self._auto_match_sheet(rule, kind)
         self.refresh_table()
 
@@ -1036,6 +1038,7 @@ class ExcelMappingQtWindow(QMainWindow):
             rule.source_file = selected
         else:
             rule.target_file = selected
+            rule._target_sheet_manually_selected = False
         self._auto_match_sheet(rule, kind)
         self.refresh_table()
 
@@ -1045,12 +1048,30 @@ class ExcelMappingQtWindow(QMainWindow):
         if not path_text:
             return
         names = workbook_sheet_names(Path(path_text))
-        current = rule.source_sheet if source else rule.target_sheet
-        if current not in names and names:
-            if source:
+        if not names:
+            return
+        if source:
+            if rule.source_sheet not in names:
                 rule.source_sheet = names[0]
-            else:
-                rule.target_sheet = names[0]
+            self._auto_match_target_sheet(rule)
+            return
+        self._auto_match_target_sheet(rule, names)
+
+    def _auto_match_target_sheet(
+        self, rule: MappingRule, names: list[str] | None = None
+    ) -> None:
+        """Match a target sheet unless the user explicitly selected one."""
+        if getattr(rule, "_target_sheet_manually_selected", False):
+            return
+        if names is None:
+            if not rule.target_file:
+                return
+            names = workbook_sheet_names(Path(rule.target_file))
+        if not names:
+            return
+        rule.target_sheet = (
+            best_name_match(rule.source_sheet, names) or names[0]
+        )
 
     def choose_sheet(self, row: int) -> None:
         item = self.table.item(row, 3)
@@ -1089,13 +1110,18 @@ class ExcelMappingQtWindow(QMainWindow):
                 rule.source_sheet = value.strip()
             else:
                 rule.target_sheet = value.strip()
+                rule._target_sheet_manually_selected = True
+            if kind == "source":
+                self._auto_match_target_sheet(rule)
             self.refresh_table()
             return
         value = "" if chosen == none else actions.get(chosen, "")
         if kind == "source":
             rule.source_sheet = value
+            self._auto_match_target_sheet(rule)
         else:
             rule.target_sheet = value
+            rule._target_sheet_manually_selected = True
         self.refresh_table()
 
     def choose_cells(self, row: int) -> None:
