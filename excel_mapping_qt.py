@@ -407,13 +407,11 @@ class ExcelMappingQtWindow(QMainWindow):
             ["映射组", "类型", "工作簿", "工作表", "单元格"]
         )
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 80)
-        self.table.setColumnWidth(1, 80)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(60)
+        for column, width in enumerate((90, 90, 420, 300, 420)):
+            self.table.setColumnWidth(column, width)
         self.table.setSelectionMode(
             QTableWidget.SelectionMode.ExtendedSelection
         )
