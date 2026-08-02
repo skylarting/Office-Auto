@@ -12,6 +12,7 @@ on:
       - "assets/excel-mapper.ico"
       - "test_export_summary.py"
       - "test_excel_mapper.py"
+      - "test_excel_mapping_qt.py"
       - ".github/workflows/build-exe.yml"
 
 jobs:
