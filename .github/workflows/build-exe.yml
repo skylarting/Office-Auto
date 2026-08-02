@@ -8,6 +8,8 @@ on:
       - "excel_mapper.py"
       - "excel_mapping_tool.py"
       - "excel_mapping_qt.py"
+      - "build_qt_icon.py"
+      - "assets/excel-mapper.ico"
       - "test_export_summary.py"
       - "test_excel_mapper.py"
       - ".github/workflows/build-exe.yml"
@@ -26,40 +28,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install pyinstaller PySide6 openpyxl xlrd xlwt xlutils pywin32
+        run: python -m pip install pyinstaller PySide6 Pillow openpyxl xlrd xlwt xlutils pywin32
+
+      - name: Generate Qt application icon
+        run: python build_qt_icon.py
 
       - name: Run tests
         run: python -m unittest -v
-
-      - name: Build EXE
-        run: >
-          python -m PyInstaller
-          --noconfirm
-          --clean
-          --onefile
-          --windowed
-          --name ExcelSummary
-          export_summary.py
-
-      - name: Build ExcelMapper EXE
-        run: >
-          python -m PyInstaller
-          --noconfirm
-          --clean
-          --onefile
-          --windowed
-          --name ExcelMapper
-          excel_mapper.py
-
-      - name: Build ExcelMappingTool EXE
-        run: >
-          python -m PyInstaller
-          --noconfirm
-          --clean
-          --onefile
-          --windowed
-          --name ExcelMappingTool
-          excel_mapping_tool.py
 
       - name: Build ExcelMappingQt EXE
         run: >
@@ -68,29 +43,10 @@ jobs:
           --clean
           --onefile
           --windowed
+          --icon assets/excel-mapper.ico
+          --add-data "assets/excel-mapper.ico;assets"
           --name ExcelMappingQt
           excel_mapping_qt.py
-
-      - name: Upload ExcelSummary EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExcelSummary-Windows
-          path: dist/ExcelSummary.exe
-          if-no-files-found: error
-
-      - name: Upload ExcelMapper EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExcelMapper-Windows
-          path: dist/ExcelMapper.exe
-          if-no-files-found: error
-
-      - name: Upload ExcelMappingTool EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExcelMappingTool-Windows
-          path: dist/ExcelMappingTool.exe
-          if-no-files-found: error
 
       - name: Upload ExcelMappingQt EXE
         uses: actions/upload-artifact@v4

@@ -7,12 +7,14 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
+    QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -25,7 +27,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -57,6 +58,11 @@ ROLE_KIND = Qt.ItemDataRole.UserRole + 1
 ROLE_DRAFT = Qt.ItemDataRole.UserRole + 2
 
 
+def bundled_asset(relative_path: str) -> Path:
+    root = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    return root / relative_path
+
+
 class QtCellPickerDialog(QDialog):
     """Spreadsheet-like picker that preserves selection order."""
 
@@ -84,8 +90,13 @@ class QtCellPickerDialog(QDialog):
         )
         self.resize(1080, 720)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
-        top = QHBoxLayout()
+        selection_panel = QFrame()
+        selection_panel.setObjectName("selectionPanel")
+        top = QHBoxLayout(selection_panel)
+        top.setContentsMargins(12, 8, 12, 8)
         top.addWidget(QLabel("已选择（按顺序）："))
         self.selected_label = QLabel()
         self.selected_label.setTextInteractionFlags(
@@ -100,10 +111,11 @@ class QtCellPickerDialog(QDialog):
         jump = QPushButton("跳转")
         jump.clicked.connect(self.jump_to_cell)
         top.addWidget(jump)
-        layout.addLayout(top)
+        layout.addWidget(selection_panel)
 
-        batch = QHBoxLayout()
-        batch.addWidget(QLabel("批量选择："))
+        batch_group = QGroupBox("批量选择")
+        batch = QHBoxLayout(batch_group)
+        batch.setContentsMargins(10, 16, 10, 8)
         for text, callback in (
             ("清空", self.clear_selection),
             ("全选", self.select_all_nonempty),
@@ -124,7 +136,7 @@ class QtCellPickerDialog(QDialog):
                 lambda _checked=False, value=trait: self.toggle_trait(value)
             )
             batch.addWidget(button)
-        layout.addLayout(batch)
+        layout.addWidget(batch_group)
 
         self.table = QTableWidget(self.rows, self.columns)
         self.table.setSelectionMode(
@@ -147,18 +159,19 @@ class QtCellPickerDialog(QDialog):
         layout.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
-        confirm = QPushButton("确定选择")
-        confirm.setDefault(True)
-        confirm.clicked.connect(self.confirm)
-        actions.addWidget(confirm)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        actions.addWidget(cancel)
-        actions.addStretch(1)
         if same_position_cells is not None:
             same = QPushButton("与来源同位置")
             same.clicked.connect(self.use_same_position)
             actions.addWidget(same)
+        actions.addStretch(1)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        actions.addWidget(cancel)
+        confirm = QPushButton("确定选择")
+        confirm.setObjectName("primaryButton")
+        confirm.setDefault(True)
+        confirm.clicked.connect(self.confirm)
+        actions.addWidget(confirm)
         layout.addLayout(actions)
 
         self._restore_initial_selection()
@@ -357,42 +370,138 @@ class ExcelMappingQtWindow(QMainWindow):
         self._refreshing = False
 
         self.setWindowTitle("Excel 单元格映射工具")
+        icon_path = bundled_asset("assets/excel-mapper.ico")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.resize(1280, 800)
         self.setMinimumSize(920, 620)
+        self.setStyleSheet(self._application_style())
         self._build_ui()
         self.refresh_table()
 
-    def _build_ui(self) -> None:
-        toolbar = QToolBar("方案操作", self)
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
-        for text, callback in (
-            ("导入映射表", self.import_scheme),
-            ("导出映射表", self.export_scheme),
-            ("清空所有映射", self.clear_all),
-            ("操作说明", self.show_help),
-        ):
-            action = QAction(text, self)
-            action.triggered.connect(callback)
-            toolbar.addAction(action)
-            if text == "导出映射表":
-                toolbar.addSeparator()
+    @staticmethod
+    def _application_style() -> str:
+        return """
+            QMainWindow, QDialog { background: #F4F6F8; color: #18212B; }
+            QLabel#pageTitle { font-size: 22px; font-weight: 600; }
+            QLabel#pageSubtitle, QLabel#secondaryText { color: #66717D; }
+            QFrame#selectionPanel {
+                background: #EAF2FE;
+                border: 1px solid #C5D9F8;
+                border-radius: 6px;
+            }
+            QGroupBox {
+                background: #FFFFFF;
+                border: 1px solid #D9DEE5;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 10px;
+                font-weight: 600;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 14px;
+                padding: 0 6px;
+            }
+            QLineEdit {
+                min-height: 32px;
+                padding: 0 10px;
+                background: #FFFFFF;
+                border: 1px solid #C9D0D8;
+                border-radius: 5px;
+            }
+            QLineEdit:hover { border-color: #7B8794; }
+            QPushButton {
+                min-height: 32px;
+                padding: 0 14px;
+                background: #FFFFFF;
+                border: 1px solid #C9D0D8;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background: #F2F5F8; border-color: #8793A0; }
+            QPushButton#primaryButton {
+                color: #FFFFFF;
+                background: #1769E0;
+                border-color: #1769E0;
+                font-weight: 600;
+            }
+            QPushButton#primaryButton:hover { background: #115BC7; }
+            QPushButton#dangerButton { color: #B42318; }
+            QTableWidget {
+                background: #FFFFFF;
+                alternate-background-color: #F8FAFC;
+                border: 1px solid #D9DEE5;
+                border-radius: 5px;
+                gridline-color: #E5E9EE;
+                selection-background-color: #D8E9FF;
+                selection-color: #18212B;
+            }
+            QHeaderView::section {
+                min-height: 34px;
+                padding: 0 8px;
+                background: #EEF2F6;
+                border: none;
+                border-right: 1px solid #D9DEE5;
+                border-bottom: 1px solid #D9DEE5;
+                font-weight: 600;
+            }
+            QProgressBar {
+                min-height: 16px;
+                border: 1px solid #D0D6DD;
+                border-radius: 8px;
+                background: #EEF1F4;
+                text-align: center;
+            }
+            QProgressBar::chunk { background: #1769E0; border-radius: 7px; }
+            QMenu { background: #FFFFFF; border: 1px solid #CCD3DB; padding: 4px; }
+            QMenu::item { padding: 7px 24px 7px 10px; border-radius: 4px; }
+            QMenu::item:selected { background: #E7F0FE; }
+        """
 
+    def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
 
-        folders = QGridLayout()
+        header_line = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title = QLabel("Excel 单元格映射工具")
+        title.setObjectName("pageTitle")
+        title_box.addWidget(title)
+        subtitle = QLabel("按映射组将来源单元格内容写入目标工作簿，原文件不会被修改。")
+        subtitle.setObjectName("pageSubtitle")
+        title_box.addWidget(subtitle)
+        header_line.addLayout(title_box, 1)
+        for text, callback, object_name in (
+            ("导入映射表", self.import_scheme, ""),
+            ("导出映射表", self.export_scheme, ""),
+            ("清空所有映射", self.clear_all, "dangerButton"),
+            ("操作说明", self.show_help, ""),
+        ):
+            button = QPushButton(text)
+            button.setObjectName(object_name)
+            button.clicked.connect(callback)
+            header_line.addWidget(button)
+        layout.addLayout(header_line)
+
+        location_group = QGroupBox("文件位置")
+        folders = QGridLayout(location_group)
+        folders.setContentsMargins(14, 18, 14, 12)
+        folders.setHorizontalSpacing(10)
+        folders.setVerticalSpacing(8)
         self.base_edit = QLineEdit()
         self.base_edit.setReadOnly(True)
-        self.base_edit.setPlaceholderText("点击选择默认文件夹")
+        self.base_edit.setPlaceholderText("点击此处选择默认文件夹")
+        self.base_edit.setToolTip("工作簿下拉菜单将优先显示该文件夹中的 Excel 文件")
         self.base_edit.mousePressEvent = (
             lambda event: self.choose_base_folder()
         )
         self.output_edit = QLineEdit()
         self.output_edit.setReadOnly(True)
-        self.output_edit.setPlaceholderText("点击选择输出文件夹")
+        self.output_edit.setPlaceholderText("点击此处选择输出文件夹")
+        self.output_edit.setToolTip("映射完成后的工作簿副本保存位置")
         self.output_edit.mousePressEvent = (
             lambda event: self.choose_output_folder()
         )
@@ -400,7 +509,23 @@ class ExcelMappingQtWindow(QMainWindow):
         folders.addWidget(self.base_edit, 0, 1)
         folders.addWidget(QLabel("输出文件夹："), 1, 0)
         folders.addWidget(self.output_edit, 1, 1)
-        layout.addLayout(folders)
+        layout.addWidget(location_group)
+
+        mapping_group = QGroupBox("映射关系")
+        mapping_layout = QVBoxLayout(mapping_group)
+        mapping_layout.setContentsMargins(12, 18, 12, 12)
+        mapping_layout.setSpacing(8)
+        mapping_header = QHBoxLayout()
+        mapping_note = QLabel("每个映射组包含一行来源和一行目标；单击工作簿、工作表或单元格即可选择或手动输入。")
+        mapping_note.setObjectName("secondaryText")
+        mapping_header.addWidget(mapping_note, 1)
+        preview = QPushButton("展开预览")
+        preview.clicked.connect(self.preview)
+        mapping_header.addWidget(preview)
+        check = QPushButton("预检查")
+        check.clicked.connect(self.precheck)
+        mapping_header.addWidget(check)
+        mapping_layout.addLayout(mapping_header)
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
@@ -427,7 +552,7 @@ class ExcelMappingQtWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(
             self.show_context_menu
         )
-        layout.addWidget(self.table, 1)
+        mapping_layout.addWidget(self.table, 1)
 
         self.hint = QLabel(
             "单击“映射组”列选中整组，单击“类型”列选中单行；"
@@ -435,9 +560,14 @@ class ExcelMappingQtWindow(QMainWindow):
             "Ctrl+C / Ctrl+V 会根据当前选中的是单行还是整组自动复制粘贴；"
             "最后一组为默认新增行。"
         )
-        self.hint.setStyleSheet("color: #59636e;")
-        layout.addWidget(self.hint)
+        self.hint.setObjectName("secondaryText")
+        self.hint.setWordWrap(True)
+        mapping_layout.addWidget(self.hint)
+        layout.addWidget(mapping_group, 1)
 
+        execution_group = QGroupBox("输出与执行")
+        execution_layout = QVBoxLayout(execution_group)
+        execution_layout.setContentsMargins(14, 18, 14, 12)
         status_line = QHBoxLayout()
         self.status_label = QLabel("尚未检查。")
         status_line.addWidget(self.status_label, 1)
@@ -446,24 +576,20 @@ class ExcelMappingQtWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setMaximumWidth(280)
         status_line.addWidget(self.progress)
-        layout.addLayout(status_line)
+        execution_layout.addLayout(status_line)
 
         actions = QHBoxLayout()
-        preview = QPushButton("展开预览")
-        preview.clicked.connect(self.preview)
-        actions.addWidget(preview)
-        check = QPushButton("预检查")
-        check.clicked.connect(self.precheck)
-        actions.addWidget(check)
         actions.addStretch(1)
         run = QPushButton("开始映射")
+        run.setObjectName("primaryButton")
         run.setDefault(True)
         run.clicked.connect(self.run_mapping)
         actions.addWidget(run)
         close = QPushButton("退出")
         close.clicked.connect(self.close)
         actions.addWidget(close)
-        layout.addLayout(actions)
+        execution_layout.addLayout(actions)
+        layout.addWidget(execution_group)
 
         delete_shortcut = QShortcut(QKeySequence.Delete, self)
         delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -1284,6 +1410,10 @@ class ExcelMappingQtWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setStyleSheet(ExcelMappingQtWindow._application_style())
+    icon_path = bundled_asset("assets/excel-mapper.ico")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     window = ExcelMappingQtWindow()
     window.show()
     sys.exit(app.exec())
