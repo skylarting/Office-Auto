@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -78,7 +79,8 @@ class QtCellPickerDialog(QDialog):
         self.reader = WorkbookReader(workbook_path)
         self.sheet_name = sheet_name
         self.result: list[str] | None = None
-        self.selection_order = list(dict.fromkeys(initial_cells))
+        self.click_order = list(dict.fromkeys(initial_cells))
+        self.selection_order = list(self.click_order)
         self.previous_selection = set(self.selection_order)
         self.same_position_cells = same_position_cells
         rows, columns = self.reader.used_dimensions(sheet_name)
@@ -103,6 +105,18 @@ class QtCellPickerDialog(QDialog):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         top.addWidget(self.selected_label, 1)
+        self.order_combo = QComboBox()
+        self.order_combo.addItem("按点击顺序", "click")
+        self.order_combo.addItem(
+            "固定顺序（先从上到下，再从左到右）",
+            "fixed",
+        )
+        self.order_combo.setMinimumWidth(260)
+        self.order_combo.currentIndexChanged.connect(
+            self.order_mode_changed
+        )
+        top.addWidget(QLabel("排列模式："))
+        top.addWidget(self.order_combo)
         self.jump_edit = QLineEdit()
         self.jump_edit.setPlaceholderText("例如 C21")
         self.jump_edit.setMaximumWidth(120)
@@ -112,6 +126,18 @@ class QtCellPickerDialog(QDialog):
         jump.clicked.connect(self.jump_to_cell)
         top.addWidget(jump)
         layout.addWidget(selection_panel)
+
+        manual_line = QHBoxLayout()
+        manual_line.addWidget(QLabel("手动输入："))
+        self.manual_edit = QLineEdit()
+        self.manual_edit.setPlaceholderText("例如 A1,B3,D5 或 A1-B3")
+        self.manual_edit.setText(format_cell_addresses(initial_cells))
+        self.manual_edit.returnPressed.connect(self.apply_manual_input)
+        manual_line.addWidget(self.manual_edit, 1)
+        apply_manual = QPushButton("应用输入")
+        apply_manual.clicked.connect(self.apply_manual_input)
+        manual_line.addWidget(apply_manual)
+        layout.addLayout(manual_line)
 
         batch_group = QGroupBox("批量选择")
         batch = QHBoxLayout(batch_group)
@@ -240,17 +266,71 @@ class QtCellPickerDialog(QDialog):
         added = current - self.previous_selection
         removed = self.previous_selection - current
         if removed:
-            self.selection_order = [
+            self.click_order = [
                 address
-                for address in self.selection_order
+                for address in self.click_order
                 if address not in removed
             ]
         if added:
             for item in self.table.selectedItems():
                 address = self._address(item.row(), item.column())
-                if address in added and address not in self.selection_order:
-                    self.selection_order.append(address)
+                if address in added and address not in self.click_order:
+                    self.click_order.append(address)
+        self.apply_selected_order_mode()
         self.previous_selection = current
+        self.update_selected_label()
+
+    def apply_selected_order_mode(self) -> None:
+        if self.order_combo.currentData() == "fixed":
+            self.selection_order = sorted(
+                self.click_order,
+                key=lambda address: (
+                    self._indices(address)[1],
+                    self._indices(address)[0],
+                ),
+            )
+        else:
+            self.selection_order = list(self.click_order)
+
+    def order_mode_changed(self) -> None:
+        self.apply_selected_order_mode()
+        self.update_selected_label()
+
+    def apply_manual_input(self) -> None:
+        try:
+            addresses = parse_cell_addresses(self.manual_edit.text())
+        except Exception as exc:
+            QMessageBox.warning(self, "单元格格式错误", str(exc))
+            return
+        if not addresses:
+            QMessageBox.information(
+                self, "尚未输入", "请输入至少一个单元格地址。"
+            )
+            return
+        max_row = max(self._indices(address)[0] for address in addresses)
+        max_column = max(
+            self._indices(address)[1] for address in addresses
+        )
+        if max_row >= self.rows or max_column >= self.columns:
+            self.rows = max(self.rows, max_row + 1)
+            self.columns = max(self.columns, max_column + 1)
+            self.table.setRowCount(self.rows)
+            self.table.setColumnCount(self.columns)
+            self._populate()
+        self.table.blockSignals(True)
+        try:
+            self.table.clearSelection()
+            self.click_order = list(dict.fromkeys(addresses))
+            self.apply_selected_order_mode()
+            for address in self.selection_order:
+                row, column = self._indices(address)
+                item = self.table.item(row, column)
+                if item is not None:
+                    item.setSelected(True)
+        finally:
+            self.table.blockSignals(False)
+        self.apply_selected_order_mode()
+        self.previous_selection = self.selected_addresses()
         self.update_selected_label()
 
     def update_selected_label(self) -> None:
@@ -264,6 +344,10 @@ class QtCellPickerDialog(QDialog):
                 + f"……（共 {len(self.selection_order)} 个）"
             )
         self.selected_label.setText(text)
+        if not self.manual_edit.hasFocus():
+            self.manual_edit.setText(
+                format_cell_addresses(self.selection_order)
+            )
 
     def _addresses_with_trait(self, trait: str) -> list[str]:
         result = []
@@ -290,12 +374,13 @@ class QtCellPickerDialog(QDialog):
                     continue
                 self.table.item(row, column).setSelected(not remove)
                 if remove:
-                    if address in self.selection_order:
-                        self.selection_order.remove(address)
-                elif address not in self.selection_order:
-                    self.selection_order.append(address)
+                    if address in self.click_order:
+                        self.click_order.remove(address)
+                elif address not in self.click_order:
+                    self.click_order.append(address)
         finally:
             self.table.blockSignals(False)
+        self.apply_selected_order_mode()
         self.previous_selection = self.selected_addresses()
         self.update_selected_label()
 
@@ -314,12 +399,13 @@ class QtCellPickerDialog(QDialog):
                 row, column = self._indices(address)
                 selecting = address not in current
                 self.table.item(row, column).setSelected(selecting)
-                if selecting and address not in self.selection_order:
-                    self.selection_order.append(address)
-                elif not selecting and address in self.selection_order:
-                    self.selection_order.remove(address)
+                if selecting and address not in self.click_order:
+                    self.click_order.append(address)
+                elif not selecting and address in self.click_order:
+                    self.click_order.remove(address)
         finally:
             self.table.blockSignals(False)
+        self.apply_selected_order_mode()
         self.previous_selection = self.selected_addresses()
         self.update_selected_label()
 
@@ -341,7 +427,9 @@ class QtCellPickerDialog(QDialog):
                 self, "尚未设置来源", "请先设置本组的来源单元格。"
             )
             return
-        self.result = list(self.same_position_cells)
+        self.click_order = list(self.same_position_cells)
+        self.apply_selected_order_mode()
+        self.result = list(self.selection_order)
         self.accept()
 
     def confirm(self) -> None:
@@ -350,6 +438,7 @@ class QtCellPickerDialog(QDialog):
                 self, "尚未选择", "请至少选择一个单元格。"
             )
             return
+        self.apply_selected_order_mode()
         self.result = list(self.selection_order)
         self.accept()
 
@@ -368,6 +457,7 @@ class ExcelMappingQtWindow(QMainWindow):
         self.base_folder: Path | None = None
         self.output_folder: Path | None = None
         self._refreshing = False
+        self._shortcuts: list[QShortcut] = []
 
         self.setWindowTitle("Excel 单元格映射工具")
         icon_path = bundled_asset("assets/excel-mapper.ico")
@@ -555,10 +645,7 @@ class ExcelMappingQtWindow(QMainWindow):
         mapping_layout.addWidget(self.table, 1)
 
         self.hint = QLabel(
-            "单击“映射组”列选中整组，单击“类型”列选中单行；"
-            "按住 Ctrl 可继续多选。Delete 删除选中组。\n"
-            "Ctrl+C / Ctrl+V 会根据当前选中的是单行还是整组自动复制粘贴；"
-            "最后一组为默认新增行。"
+            "快捷键：Ctrl/⌘+C、Ctrl/⌘+V、Delete/⌘+Delete；支持右击操作。"
         )
         self.hint.setObjectName("secondaryText")
         self.hint.setWordWrap(True)
@@ -591,17 +678,25 @@ class ExcelMappingQtWindow(QMainWindow):
         execution_layout.addLayout(actions)
         layout.addWidget(execution_group)
 
-        delete_shortcut = QShortcut(QKeySequence.Delete, self)
-        delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        delete_shortcut.activated.connect(
-            self.delete_selected_groups
-        )
+        for sequence in (
+            QKeySequence.Delete,
+            QKeySequence("Meta+Backspace"),
+            QKeySequence("Meta+Delete"),
+        ):
+            delete_shortcut = QShortcut(sequence, self)
+            delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            delete_shortcut.activated.connect(
+                self.delete_selected_groups
+            )
+            self._shortcuts.append(delete_shortcut)
         copy_shortcut = QShortcut(QKeySequence.Copy, self)
         copy_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         copy_shortcut.activated.connect(self.copy_selection)
+        self._shortcuts.append(copy_shortcut)
         paste_shortcut = QShortcut(QKeySequence.Paste, self)
         paste_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         paste_shortcut.activated.connect(self.paste_selection)
+        self._shortcuts.append(paste_shortcut)
 
     def active_rules(self) -> list[MappingRule]:
         return [rule for rule in self.rules if not mapping_rule_is_blank(rule)]
@@ -622,7 +717,7 @@ class ExcelMappingQtWindow(QMainWindow):
                     row = index * 2 + offset
                     values = self._row_values(index, rule, kind, draft)
                     background = QColor(
-                        "#F2F2F2" if (index + 1) % 2 else "#FFFFFF"
+                        "#F3F6FA" if (index + 1) % 2 else "#FFFFFF"
                     )
                     for column, text in enumerate(values):
                         item = QTableWidgetItem(text)
@@ -910,64 +1005,6 @@ class ExcelMappingQtWindow(QMainWindow):
         index, kind = int(item.data(ROLE_GROUP)), str(item.data(ROLE_KIND))
         rule = self.ensure_rule(index)
         source = kind == "source"
-        menu = QMenu(self)
-        choose = menu.addAction("打开表格选择单元格…")
-        manual = menu.addAction("手动输入单元格…")
-        same = None
-        if not source:
-            menu.addSeparator()
-            same = menu.addAction("与来源同位置")
-        chosen = menu.exec(
-            self.table.viewport().mapToGlobal(
-                self.table.visualItemRect(item).bottomLeft()
-            )
-        )
-        if chosen is None:
-            return
-        if chosen == same:
-            if not rule.source_cells:
-                QMessageBox.information(
-                    self, "尚未设置来源", "请先设置本组的来源单元格。"
-                )
-                return
-            rule.target_cells = list(rule.source_cells)
-            rule.mode = infer_mapping_mode(
-                rule.source_cells, rule.target_cells
-            )
-            self.refresh_table()
-            return
-        if chosen == manual:
-            current_cells = (
-                rule.source_cells if source else rule.target_cells
-            )
-            value, accepted = QInputDialog.getText(
-                self,
-                "手动输入单元格",
-                "单元格地址（逗号分隔）：",
-                text=format_cell_addresses(current_cells),
-            )
-            if not accepted:
-                return
-            try:
-                cells = parse_cell_addresses(value)
-            except Exception as exc:
-                QMessageBox.warning(self, "单元格格式错误", str(exc))
-                return
-            old_same = rule.target_cells == rule.source_cells
-            if source:
-                rule.source_cells = cells
-                if old_same:
-                    rule.target_cells = list(cells)
-            else:
-                rule.target_cells = cells
-            if rule.source_cells and rule.target_cells:
-                rule.mode = infer_mapping_mode(
-                    rule.source_cells, rule.target_cells
-                )
-            self.refresh_table()
-            return
-        if chosen != choose:
-            return
         path_text = rule.source_file if source else rule.target_file
         sheet = rule.source_sheet if source else rule.target_sheet
         if not path_text or not sheet:
@@ -1397,9 +1434,11 @@ class ExcelMappingQtWindow(QMainWindow):
             "操作说明",
             "单击“映射组”列：选中整组\n"
             "单击“类型”列：选中单行\n"
-            "单击工作簿/工作表/单元格：从菜单选择或手动输入\n\n"
-            "Delete：删除选中映射组\n"
-            "Ctrl+C / Ctrl+V：根据选中的单行或整组自动复制粘贴\n\n"
+            "单击工作簿/工作表：从菜单选择或输入\n"
+            "单击单元格：直接打开单元格选择窗口\n"
+            "单元格选择窗口可手动输入地址，并可选择按点击顺序或固定顺序排列\n\n"
+            "Delete/⌘+Delete：删除选中映射组\n"
+            "Ctrl/⌘+C、Ctrl/⌘+V：根据选中的单行或整组自动复制粘贴\n\n"
             "导入映射表支持：\n"
             "三列：工作簿、工作表、单元格（来源/目标交替）\n"
             "四列：类型、工作簿、工作表、单元格\n"
