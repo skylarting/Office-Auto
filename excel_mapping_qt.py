@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 import sys
+from types import ModuleType, SimpleNamespace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -31,6 +31,43 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def install_tkinter_build_stub() -> None:
+    """Provide import-only Tk names so the Qt build can exclude Tk/Tcl."""
+    if "tkinter" in sys.modules:
+        return
+
+    class PlaceholderWidget:
+        pass
+
+    module = ModuleType("tkinter")
+    for name, value in {
+        "BOTH": "both",
+        "END": "end",
+        "LEFT": "left",
+        "RIGHT": "right",
+        "W": "w",
+        "X": "x",
+    }.items():
+        setattr(module, name, value)
+    for name in (
+        "Canvas",
+        "IntVar",
+        "Menu",
+        "StringVar",
+        "Text",
+        "Tk",
+        "Toplevel",
+    ):
+        setattr(module, name, PlaceholderWidget)
+    module.filedialog = SimpleNamespace()
+    module.messagebox = SimpleNamespace()
+    module.ttk = SimpleNamespace(Frame=PlaceholderWidget)
+    sys.modules["tkinter"] = module
+
+
+install_tkinter_build_stub()
 
 from excel_mapper import (
     MODE_MANUAL,
@@ -132,11 +169,15 @@ class QtCellPickerDialog(QDialog):
         self.manual_edit = QLineEdit()
         self.manual_edit.setPlaceholderText("例如 A1,B3,D5 或 A1-B3")
         self.manual_edit.setText(format_cell_addresses(initial_cells))
+        self.manual_timer = QTimer(self)
+        self.manual_timer.setSingleShot(True)
+        self.manual_timer.setInterval(250)
+        self.manual_timer.timeout.connect(self.apply_manual_input)
+        self.manual_edit.textEdited.connect(
+            lambda _text: self.manual_timer.start()
+        )
         self.manual_edit.returnPressed.connect(self.apply_manual_input)
         manual_line.addWidget(self.manual_edit, 1)
-        apply_manual = QPushButton("应用输入")
-        apply_manual.clicked.connect(self.apply_manual_input)
-        manual_line.addWidget(apply_manual)
         layout.addLayout(manual_line)
 
         batch_group = QGroupBox("批量选择")
@@ -297,16 +338,26 @@ class QtCellPickerDialog(QDialog):
         self.update_selected_label()
 
     def apply_manual_input(self) -> None:
+        text = self.manual_edit.text().strip()
+        if not text:
+            self.table.clearSelection()
+            self.click_order = []
+            self.selection_order = []
+            self.previous_selection = set()
+            self.manual_edit.setStyleSheet("")
+            self.manual_edit.setToolTip("")
+            self.update_selected_label()
+            return
         try:
-            addresses = parse_cell_addresses(self.manual_edit.text())
+            addresses = parse_cell_addresses(text)
         except Exception as exc:
-            QMessageBox.warning(self, "单元格格式错误", str(exc))
-            return
-        if not addresses:
-            QMessageBox.information(
-                self, "尚未输入", "请输入至少一个单元格地址。"
+            self.manual_edit.setStyleSheet(
+                "border: 1px solid #D92D20;"
             )
+            self.manual_edit.setToolTip(str(exc))
             return
+        self.manual_edit.setStyleSheet("")
+        self.manual_edit.setToolTip("")
         max_row = max(self._indices(address)[0] for address in addresses)
         max_column = max(
             self._indices(address)[1] for address in addresses
@@ -480,6 +531,11 @@ class ExcelMappingQtWindow(QMainWindow):
                 border: 1px solid #C5D9F8;
                 border-radius: 6px;
             }
+            QFrame#locationBar {
+                background: #FFFFFF;
+                border: 1px solid #D9DEE5;
+                border-radius: 7px;
+            }
             QGroupBox {
                 background: #FFFFFF;
                 border: 1px solid #D9DEE5;
@@ -576,11 +632,11 @@ class ExcelMappingQtWindow(QMainWindow):
             header_line.addWidget(button)
         layout.addLayout(header_line)
 
-        location_group = QGroupBox("文件位置")
-        folders = QGridLayout(location_group)
-        folders.setContentsMargins(14, 18, 14, 12)
-        folders.setHorizontalSpacing(10)
-        folders.setVerticalSpacing(8)
+        location_bar = QFrame()
+        location_bar.setObjectName("locationBar")
+        folders = QHBoxLayout(location_bar)
+        folders.setContentsMargins(12, 8, 12, 8)
+        folders.setSpacing(10)
         self.base_edit = QLineEdit()
         self.base_edit.setReadOnly(True)
         self.base_edit.setPlaceholderText("点击此处选择默认文件夹")
@@ -595,11 +651,11 @@ class ExcelMappingQtWindow(QMainWindow):
         self.output_edit.mousePressEvent = (
             lambda event: self.choose_output_folder()
         )
-        folders.addWidget(QLabel("默认文件夹："), 0, 0)
-        folders.addWidget(self.base_edit, 0, 1)
-        folders.addWidget(QLabel("输出文件夹："), 1, 0)
-        folders.addWidget(self.output_edit, 1, 1)
-        layout.addWidget(location_group)
+        folders.addWidget(QLabel("默认文件夹："))
+        folders.addWidget(self.base_edit, 1)
+        folders.addWidget(QLabel("输出文件夹："))
+        folders.addWidget(self.output_edit, 1)
+        layout.addWidget(location_bar)
 
         mapping_group = QGroupBox("映射关系")
         mapping_layout = QVBoxLayout(mapping_group)
@@ -645,7 +701,9 @@ class ExcelMappingQtWindow(QMainWindow):
         mapping_layout.addWidget(self.table, 1)
 
         self.hint = QLabel(
-            "快捷键：Ctrl+C、Ctrl+V、Delete；支持右击操作。"
+            "选择：单击“类型”列选单行，单击“映射组”列选整组；"
+            "Ctrl+C/V 仅复制工作簿、工作表和单元格，组号与类型自动生成；"
+            "Delete 删除所选行或组；支持右击操作。"
         )
         self.hint.setObjectName("secondaryText")
         self.hint.setWordWrap(True)
@@ -678,16 +736,22 @@ class ExcelMappingQtWindow(QMainWindow):
         execution_layout.addLayout(actions)
         layout.addWidget(execution_group)
 
-        delete_shortcut = QShortcut(QKeySequence.Delete, self)
-        delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        delete_shortcut.activated.connect(self.delete_selected_groups)
+        delete_shortcut = QShortcut(QKeySequence.Delete, self.table)
+        delete_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        delete_shortcut.activated.connect(self.delete_selection)
         self._shortcuts.append(delete_shortcut)
-        copy_shortcut = QShortcut(QKeySequence.Copy, self)
-        copy_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        copy_shortcut = QShortcut(QKeySequence.Copy, self.table)
+        copy_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
         copy_shortcut.activated.connect(self.copy_selection)
         self._shortcuts.append(copy_shortcut)
-        paste_shortcut = QShortcut(QKeySequence.Paste, self)
-        paste_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        paste_shortcut = QShortcut(QKeySequence.Paste, self.table)
+        paste_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
         paste_shortcut.activated.connect(self.paste_selection)
         self._shortcuts.append(paste_shortcut)
 
@@ -1036,8 +1100,47 @@ class ExcelMappingQtWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("在上方插入映射组", self.insert_above)
         menu.addAction("在下方插入映射组", self.insert_below)
+        menu.addAction("删除选中行内容", self.delete_selected_rows)
         menu.addAction("删除选中映射组", self.delete_selected_groups)
         menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def selected_data_rows(self) -> list[int]:
+        return sorted(
+            {
+                item.row()
+                for item in self.table.selectedItems()
+                if not bool(item.data(ROLE_DRAFT))
+            }
+        )
+
+    def delete_selection(self) -> None:
+        if self.selection_is_complete_groups():
+            self.delete_selected_groups()
+        else:
+            self.delete_selected_rows()
+
+    def delete_selected_rows(self) -> None:
+        rows = self.selected_data_rows()
+        if not rows:
+            self.refresh_table()
+            self.status_label.setText("默认新增行已重置。")
+            return
+        for row in rows:
+            index = row // 2
+            if index >= len(self.rules):
+                continue
+            rule = self.rules[index]
+            if row % 2 == 0:
+                rule.source_file = ""
+                rule.source_sheet = ""
+                rule.source_cells = []
+            else:
+                rule.target_file = ""
+                rule.target_sheet = ""
+                rule.target_cells = []
+            rule.mode = MODE_MANUAL
+        self.refresh_table()
+        self.status_label.setText(f"已删除 {len(rows)} 行内容。")
 
     def delete_selected_groups(self) -> None:
         indices = self.selected_group_indices()
@@ -1429,9 +1532,9 @@ class ExcelMappingQtWindow(QMainWindow):
             "单击“类型”列：选中单行\n"
             "单击工作簿/工作表：从菜单选择或输入\n"
             "单击单元格：直接打开单元格选择窗口\n"
-            "单元格选择窗口可手动输入地址，并可选择按点击顺序或固定顺序排列\n\n"
-            "Delete：删除选中映射组\n"
-            "Ctrl+C、Ctrl+V：根据选中的单行或整组自动复制粘贴\n\n"
+            "单元格选择窗口可直接输入地址，并可选择按点击顺序或固定顺序排列\n\n"
+            "Delete：删除选中单行内容或整个映射组\n"
+            "Ctrl+C、Ctrl+V：仅复制粘贴工作簿、工作表和单元格；组号与类型自动生成\n\n"
             "导入映射表支持：\n"
             "三列：工作簿、工作表、单元格（来源/目标交替）\n"
             "四列：类型、工作簿、工作表、单元格\n"
