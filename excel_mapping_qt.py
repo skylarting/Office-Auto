@@ -7,8 +7,8 @@ from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import QDir, Qt, QTimer
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPen, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -26,6 +26,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -99,6 +102,26 @@ ROLE_DRAFT = Qt.ItemDataRole.UserRole + 2
 def bundled_asset(relative_path: str) -> Path:
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
     return root / relative_path
+
+
+def native_path_text(value: str | Path) -> str:
+    return QDir.toNativeSeparators(str(value))
+
+
+class RedBorderSelectionDelegate(QStyledItemDelegate):
+    """Draw selection without replacing the workbook cell background."""
+
+    def paint(self, painter, option, index) -> None:
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        clean_option = QStyleOptionViewItem(option)
+        clean_option.state &= ~QStyle.StateFlag.State_Selected
+        super().paint(painter, clean_option, index)
+        if not selected:
+            return
+        painter.save()
+        painter.setPen(QPen(QColor("#D93025"), 2))
+        painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
+        painter.restore()
 
 
 class QtCellPickerDialog(QDialog):
@@ -212,13 +235,7 @@ class QtCellPickerDialog(QDialog):
         self.table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectItems
         )
-        self.table.setStyleSheet(
-            "QTableWidget::item:selected {"
-            "  border: 2px solid #D93025;"
-            "  background-color: transparent;"
-            "  color: palette(text);"
-            "}"
-        )
+        self.table.setItemDelegate(RedBorderSelectionDelegate(self.table))
         self.table.horizontalHeader().setDefaultSectionSize(125)
         self.table.verticalHeader().setDefaultSectionSize(28)
         self.table.itemSelectionChanged.connect(self.selection_changed)
@@ -680,8 +697,8 @@ class ExcelMappingQtWindow(QMainWindow):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(False)
-        header.setMinimumSectionSize(60)
-        for column, width in enumerate((90, 90, 420, 300, 420)):
+        header.setMinimumSectionSize(45)
+        for column, width in enumerate((65, 55, 330, 240, 510)):
             self.table.setColumnWidth(column, width)
         self.table.setSelectionMode(
             QTableWidget.SelectionMode.ExtendedSelection
@@ -800,7 +817,9 @@ class ExcelMappingQtWindow(QMainWindow):
         sheet = rule.source_sheet if source else rule.target_sheet
         cells = rule.source_cells if source else rule.target_cells
         workbook_text = (
-            format_project_path(Path(path), self.base_folder)
+            native_path_text(
+                format_project_path(Path(path), self.base_folder)
+            )
             if path
             else "单击选择"
         )
@@ -1204,7 +1223,9 @@ class ExcelMappingQtWindow(QMainWindow):
         lines = [
             "\t".join(
                 (
-                    format_project_path(Path(book), self.base_folder)
+                    native_path_text(
+                        format_project_path(Path(book), self.base_folder)
+                    )
                     if book else "",
                     sheet,
                     format_cell_addresses(cells) if cells else "",
@@ -1320,10 +1341,12 @@ class ExcelMappingQtWindow(QMainWindow):
         )
         if selected:
             self.base_folder = Path(selected)
-            self.base_edit.setText(selected)
+            self.base_edit.setText(native_path_text(selected))
             if self.output_folder is None:
                 self.output_folder = self.base_folder / "映射结果"
-                self.output_edit.setText(str(self.output_folder))
+                self.output_edit.setText(
+                    native_path_text(self.output_folder)
+                )
             self.refresh_table()
 
     def choose_output_folder(self) -> None:
@@ -1334,7 +1357,7 @@ class ExcelMappingQtWindow(QMainWindow):
         )
         if selected:
             self.output_folder = Path(selected)
-            self.output_edit.setText(selected)
+            self.output_edit.setText(native_path_text(selected))
 
     def import_scheme(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
@@ -1370,7 +1393,7 @@ class ExcelMappingQtWindow(QMainWindow):
         else:
             return
         self.base_folder = Path(selected).parent
-        self.base_edit.setText(str(self.base_folder))
+        self.base_edit.setText(native_path_text(self.base_folder))
         self.refresh_table()
 
     def export_scheme(self) -> None:
