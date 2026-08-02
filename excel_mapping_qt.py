@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -131,6 +132,13 @@ class QtCellPickerDialog(QDialog):
         )
         self.table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectItems
+        )
+        self.table.setStyleSheet(
+            "QTableWidget::item:selected {"
+            "  border: 2px solid #D93025;"
+            "  background-color: transparent;"
+            "  color: palette(text);"
+            "}"
         )
         self.table.horizontalHeader().setDefaultSectionSize(125)
         self.table.verticalHeader().setDefaultSectionSize(28)
@@ -342,6 +350,8 @@ class ExcelMappingQtWindow(QMainWindow):
         super().__init__()
         self.rules: list[MappingRule] = []
         self.copied_groups: list[MappingRule] = []
+        self.copied_rows: list[tuple[str, str, list[str]]] = []
+        self.clipboard_scope = ""
         self.base_folder: Path | None = None
         self.output_folder: Path | None = None
         self._refreshing = False
@@ -412,7 +422,6 @@ class ExcelMappingQtWindow(QMainWindow):
         )
         self.table.setAlternatingRowColors(False)
         self.table.cellClicked.connect(self.cell_clicked)
-        self.table.cellDoubleClicked.connect(self.cell_double_clicked)
         self.table.itemChanged.connect(self.item_changed)
         self.table.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu
@@ -425,8 +434,7 @@ class ExcelMappingQtWindow(QMainWindow):
         self.hint = QLabel(
             "单击“映射组”列选中整组，单击“类型”列选中单行；"
             "按住 Ctrl 可继续多选。Delete 删除选中组。\n"
-            "Ctrl+C / Ctrl+V 复制粘贴行内容；"
-            "Ctrl+Shift+C / Ctrl+Shift+V 复制粘贴完整映射组；"
+            "Ctrl+C / Ctrl+V 会根据当前选中的是单行还是整组自动复制粘贴；"
             "最后一组为默认新增行。"
         )
         self.hint.setStyleSheet("color: #59636e;")
@@ -459,21 +467,17 @@ class ExcelMappingQtWindow(QMainWindow):
         actions.addWidget(close)
         layout.addLayout(actions)
 
-        QShortcut(QKeySequence.Delete, self.table).activated.connect(
+        delete_shortcut = QShortcut(QKeySequence.Delete, self)
+        delete_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        delete_shortcut.activated.connect(
             self.delete_selected_groups
         )
-        QShortcut(QKeySequence.Copy, self.table).activated.connect(
-            self.copy_rows
-        )
-        QShortcut(QKeySequence.Paste, self.table).activated.connect(
-            self.paste_rows
-        )
-        QShortcut(
-            QKeySequence("Ctrl+Shift+C"), self.table
-        ).activated.connect(self.copy_groups)
-        QShortcut(
-            QKeySequence("Ctrl+Shift+V"), self.table
-        ).activated.connect(self.paste_groups)
+        copy_shortcut = QShortcut(QKeySequence.Copy, self)
+        copy_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        copy_shortcut.activated.connect(self.copy_selection)
+        paste_shortcut = QShortcut(QKeySequence.Paste, self)
+        paste_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        paste_shortcut.activated.connect(self.paste_selection)
 
     def active_rules(self) -> list[MappingRule]:
         return [rule for rule in self.rules if not mapping_rule_is_blank(rule)]
@@ -522,14 +526,14 @@ class ExcelMappingQtWindow(QMainWindow):
         workbook_text = (
             format_project_path(Path(path), self.base_folder)
             if path
-            else "单击选择；双击浏览"
+            else "单击选择"
         )
-        sheet_text = sheet or "单击选择；双击输入"
+        sheet_text = sheet or "单击选择或输入"
         if source:
             cell_text = (
                 format_cell_addresses(cells)
                 if cells
-                else "单击选择；双击输入"
+                else "单击选择或输入"
             )
         elif not rule.source_cells and not cells:
             cell_text = "默认同位置；点击可修改"
@@ -539,7 +543,7 @@ class ExcelMappingQtWindow(QMainWindow):
             cell_text = (
                 format_cell_addresses(cells)
                 if cells
-                else "单击选择；双击输入"
+                else "单击选择或输入"
             )
         return [
             str(index + 1),
@@ -641,12 +645,6 @@ class ExcelMappingQtWindow(QMainWindow):
             self.choose_sheet(row)
         elif column == 4:
             self.choose_cells(row)
-
-    def cell_double_clicked(self, row: int, column: int) -> None:
-        if column == 2:
-            self.browse_workbook(row)
-        elif column in (3, 4):
-            self.table.editItem(self.table.item(row, column))
 
     def select_group(self, index: int) -> None:
         preserve = bool(
@@ -760,7 +758,21 @@ class ExcelMappingQtWindow(QMainWindow):
         if chosen is None:
             return
         if chosen == manual:
-            self.table.editItem(item)
+            current = (
+                rule.source_sheet
+                if kind == "source"
+                else rule.target_sheet
+            )
+            value, accepted = QInputDialog.getText(
+                self, "手动输入工作表", "工作表名称：", text=current
+            )
+            if not accepted:
+                return
+            if kind == "source":
+                rule.source_sheet = value.strip()
+            else:
+                rule.target_sheet = value.strip()
+            self.refresh_table()
             return
         value = "" if chosen == none else actions.get(chosen, "")
         if kind == "source":
@@ -774,6 +786,64 @@ class ExcelMappingQtWindow(QMainWindow):
         index, kind = int(item.data(ROLE_GROUP)), str(item.data(ROLE_KIND))
         rule = self.ensure_rule(index)
         source = kind == "source"
+        menu = QMenu(self)
+        choose = menu.addAction("打开表格选择单元格…")
+        manual = menu.addAction("手动输入单元格…")
+        same = None
+        if not source:
+            menu.addSeparator()
+            same = menu.addAction("与来源同位置")
+        chosen = menu.exec(
+            self.table.viewport().mapToGlobal(
+                self.table.visualItemRect(item).bottomLeft()
+            )
+        )
+        if chosen is None:
+            return
+        if chosen == same:
+            if not rule.source_cells:
+                QMessageBox.information(
+                    self, "尚未设置来源", "请先设置本组的来源单元格。"
+                )
+                return
+            rule.target_cells = list(rule.source_cells)
+            rule.mode = infer_mapping_mode(
+                rule.source_cells, rule.target_cells
+            )
+            self.refresh_table()
+            return
+        if chosen == manual:
+            current_cells = (
+                rule.source_cells if source else rule.target_cells
+            )
+            value, accepted = QInputDialog.getText(
+                self,
+                "手动输入单元格",
+                "单元格地址（逗号分隔）：",
+                text=format_cell_addresses(current_cells),
+            )
+            if not accepted:
+                return
+            try:
+                cells = parse_cell_addresses(value)
+            except Exception as exc:
+                QMessageBox.warning(self, "单元格格式错误", str(exc))
+                return
+            old_same = rule.target_cells == rule.source_cells
+            if source:
+                rule.source_cells = cells
+                if old_same:
+                    rule.target_cells = list(cells)
+            else:
+                rule.target_cells = cells
+            if rule.source_cells and rule.target_cells:
+                rule.mode = infer_mapping_mode(
+                    rule.source_cells, rule.target_cells
+                )
+            self.refresh_table()
+            return
+        if chosen != choose:
+            return
         path_text = rule.source_file if source else rule.target_file
         sheet = rule.source_sheet if source else rule.target_sheet
         if not path_text or not sheet:
@@ -807,12 +877,8 @@ class ExcelMappingQtWindow(QMainWindow):
 
     def show_context_menu(self, position) -> None:
         menu = QMenu(self)
-        menu.addAction("复制选中行内容", self.copy_rows)
-        menu.addAction("粘贴行内容", self.paste_rows)
-        menu.addSeparator()
-        menu.addAction("复制选中映射组", self.copy_groups)
-        paste = menu.addAction("粘贴映射组", self.paste_groups)
-        paste.setEnabled(bool(self.copied_groups))
+        menu.addAction("复制", self.copy_selection)
+        menu.addAction("粘贴", self.paste_selection)
         menu.addSeparator()
         menu.addAction("在上方插入映射组", self.insert_above)
         menu.addAction("在下方插入映射组", self.insert_below)
@@ -845,6 +911,8 @@ class ExcelMappingQtWindow(QMainWindow):
             MappingRule(**asdict(self.rules[index]))
             for index in indices
         ]
+        self.copied_rows = []
+        self.clipboard_scope = "group"
         self.status_label.setText(
             f"已复制 {len(self.copied_groups)} 个映射组。"
         )
@@ -864,14 +932,29 @@ class ExcelMappingQtWindow(QMainWindow):
 
     def copy_rows(self) -> None:
         rows = sorted({item.row() for item in self.table.selectedItems()})
-        lines = []
-        for row in rows:
-            lines.append(
-                "\t".join(
-                    self.table.item(row, column).text()
-                    for column in range(2, 5)
+        flattened = self._flatten_rows()
+        self.copied_rows = [
+            (
+                flattened[row][0],
+                flattened[row][1],
+                list(flattened[row][2]),
+            )
+            for row in rows
+            if row < len(flattened)
+        ]
+        self.copied_groups = []
+        self.clipboard_scope = "row"
+        lines = [
+            "\t".join(
+                (
+                    format_project_path(Path(book), self.base_folder)
+                    if book else "",
+                    sheet,
+                    format_cell_addresses(cells) if cells else "",
                 )
             )
+            for book, sheet, cells in self.copied_rows
+        ]
         QApplication.clipboard().setText("\n".join(lines))
         self.status_label.setText(f"已复制 {len(lines)} 行内容。")
 
@@ -879,28 +962,45 @@ class ExcelMappingQtWindow(QMainWindow):
         start = self.table.currentRow()
         if start < 0:
             return
-        lines = QApplication.clipboard().text().splitlines()
         rows = self._flatten_rows()
-        incoming = []
-        for line in lines:
-            fields = line.split("\t")
-            if len(fields) != 3:
-                QMessageBox.warning(
-                    self, "无法粘贴", "内容必须是三列。"
-                )
-                return
-            cells = (
-                []
-                if fields[2] in ("", "同位置")
-                or fields[2].startswith(("单击", "默认"))
-                else parse_cell_addresses(fields[2])
-            )
-            incoming.append((fields[0], fields[1], cells))
+        incoming = [
+            (book, sheet, list(cells))
+            for book, sheet, cells in self.copied_rows
+        ]
+        if not incoming:
+            QMessageBox.information(self, "无可粘贴内容", "请先复制单行。")
+            return
         while len(rows) < start + len(incoming):
             rows.extend([("", "", []), ("", "", [])])
         rows[start:start + len(incoming)] = incoming
         self._replace_from_rows(rows)
         self.refresh_table()
+
+    def selection_is_complete_groups(self) -> bool:
+        selected_rows = {
+            item.row() for item in self.table.selectedItems()
+            if not bool(item.data(ROLE_DRAFT))
+        }
+        if not selected_rows:
+            return False
+        return all(
+            index * 2 in selected_rows and index * 2 + 1 in selected_rows
+            for index in {row // 2 for row in selected_rows}
+        )
+
+    def copy_selection(self) -> None:
+        if self.selection_is_complete_groups():
+            self.copy_groups()
+        else:
+            self.copy_rows()
+
+    def paste_selection(self) -> None:
+        if self.clipboard_scope == "group":
+            self.paste_groups()
+        elif self.clipboard_scope == "row":
+            self.paste_rows()
+        else:
+            QMessageBox.information(self, "无可粘贴内容", "请先使用 Ctrl+C 复制内容。")
 
     def _flatten_rows(self):
         rows = []
@@ -997,12 +1097,7 @@ class ExcelMappingQtWindow(QMainWindow):
             return
         box = QMessageBox(self)
         box.setWindowTitle("选择导入方式")
-        box.setText(
-            f"映射表包含 {len(imported)} 组映射。\n\n"
-            "支持三列：工作簿、工作表、单元格（来源/目标交替）\n"
-            "支持四列：类型、工作簿、工作表、单元格\n"
-            "支持五列：映射组、类型、工作簿、工作表、单元格"
-        )
+        box.setText(f"映射表包含 {len(imported)} 组映射，请选择导入方式。")
         replace = box.addButton(
             "清空并覆盖", QMessageBox.ButtonRole.AcceptRole
         )
@@ -1178,12 +1273,13 @@ class ExcelMappingQtWindow(QMainWindow):
             "操作说明",
             "单击“映射组”列：选中整组\n"
             "单击“类型”列：选中单行\n"
-            "单击工作簿/工作表/单元格：选择内容\n"
-            "双击工作簿：浏览其他文件\n"
-            "双击工作表或单元格：手动输入\n\n"
+            "单击工作簿/工作表/单元格：从菜单选择或手动输入\n\n"
             "Delete：删除选中映射组\n"
-            "Ctrl+C / Ctrl+V：复制粘贴行内容\n"
-            "Ctrl+Shift+C / Ctrl+Shift+V：复制粘贴完整映射组",
+            "Ctrl+C / Ctrl+V：根据选中的单行或整组自动复制粘贴\n\n"
+            "导入映射表支持：\n"
+            "三列：工作簿、工作表、单元格（来源/目标交替）\n"
+            "四列：类型、工作簿、工作表、单元格\n"
+            "五列：映射组、类型、工作簿、工作表、单元格",
         )
 
 
