@@ -8,7 +8,15 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 from PySide6.QtCore import QDir, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPen, QShortcut
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPalette,
+    QPen,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -115,6 +123,14 @@ class RedBorderSelectionDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         clean_option = QStyleOptionViewItem(option)
         clean_option.state &= ~QStyle.StateFlag.State_Selected
+        clean_option.palette.setBrush(
+            QPalette.ColorRole.Highlight,
+            QBrush(QColor(0, 0, 0, 0)),
+        )
+        clean_option.palette.setBrush(
+            QPalette.ColorRole.HighlightedText,
+            clean_option.palette.brush(QPalette.ColorRole.Text),
+        )
         super().paint(painter, clean_option, index)
         if not selected:
             return
@@ -234,6 +250,12 @@ class QtCellPickerDialog(QDialog):
         )
         self.table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectItems
+        )
+        self.table.setStyleSheet(
+            "QTableWidget {"
+            "selection-background-color: transparent;"
+            "selection-color: palette(text);"
+            "}"
         )
         self.table.setItemDelegate(RedBorderSelectionDelegate(self.table))
         self.table.horizontalHeader().setDefaultSectionSize(125)
