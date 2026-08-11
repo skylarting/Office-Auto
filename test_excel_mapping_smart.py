@@ -12,6 +12,7 @@ from excel_mapping_smart import (
     SmartMappingWindow, build_plan, candidate_matches, find_plan_files,
     rebind_plan,
 )
+from excel_sheet_viewer import SheetViewPane, WorksheetModel
 from smart_template import execute_smart_plan, load_plan, save_plan
 
 
@@ -55,6 +56,36 @@ class SmartWizardTests(unittest.TestCase):
         groups = window._pending_groups()
         self.assertEqual(len(groups), 2)
         self.assertEqual(sorted(map(len, groups)), [1, 2])
+        window.close()
+
+    def test_sheet_viewer_loads_complete_used_area_and_toggles_traits(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "viewer.xlsx"
+            make_book(path, "数据")
+            pane = SheetViewPane("来源数据")
+            pane.load_sheet(path, "数据")
+            self.assertEqual(pane.model.rows, 5)
+            self.assertEqual(pane.model.columns, 3)
+            pane.select_trait("formula", True)
+            self.assertEqual(pane.selected_addresses(), ["C5"])
+            pane.select_trait("formula", False)
+            self.assertEqual(pane.selected_addresses(), [])
+            pane.select_trait("number", True)
+            self.assertIn("B4", pane.selected_addresses())
+            self.assertNotIn("C5", pane.selected_addresses())
+            pane.close()
+
+    def test_review_group_includes_auto_and_pending_items_for_same_sheet(self):
+        window = SmartMappingWindow()
+        from smart_template import SmartMatch, SmartTemplatePlan
+        common = ("a.xlsx", "数据", "b.xlsx", "报表")
+        window.plan = SmartTemplatePlan(matches=[
+            SmartMatch(common[0], common[1], "A1", (), (), common[2], common[3], "B1", (), (), 1, "自动匹配"),
+            SmartMatch(common[0], common[1], "A2", (), (), common[2], common[3], "B2", (), (), .7, "待确认"),
+        ])
+        groups = window._pending_groups()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]), 2)
         window.close()
 
     def test_learning_plan_can_save_load_and_execute_copy(self):

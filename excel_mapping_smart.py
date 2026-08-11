@@ -8,16 +8,19 @@ import json
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from excel_mapping_qt import bundled_asset, install_tkinter_build_stub
-from excel_mapper import WorkbookReader, best_name_match, workbook_files_in_folder
+from excel_mapper import (
+    best_name_match, format_cell_addresses, workbook_files_in_folder,
+)
+from excel_sheet_viewer import DualSheetViewer
 from smart_template import (
     SheetPair, SmartMatch, SmartTemplatePlan, execute_smart_plan, load_plan,
     match_pair, matches_to_mapping_rules, save_plan, suggest_sheet_pairs,
@@ -153,7 +156,8 @@ class ReviewDialog(QDialog):
         self.match = matches[0]
         self.answer = "skip"
         self.setWindowTitle(f"确认工作表对应关系（{index}/{total}）")
-        self.resize(1050, 620)
+        self.resize(1420, 880)
+        self.setMinimumSize(980, 680)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         question = QLabel("请确认左右两张工作表是否对应")
@@ -166,22 +170,40 @@ class ReviewDialog(QDialog):
         )
         detail.setObjectName("secondaryText")
         root.addWidget(detail)
-        grids = QHBoxLayout()
-        grids.addWidget(self._preview("来源数据", Path(match.source_file), match.source_sheet, match.source_address), 1)
-        grids.addWidget(self._preview("要填写的报表", Path(match.target_file), match.target_sheet, match.target_address), 1)
-        root.addLayout(grids, 1)
-        examples = QTableWidget(min(len(matches), 6), 2)
-        examples.setHorizontalHeaderLabels(["来源项目示例", "目标项目示例"])
-        examples.horizontalHeader().setStretchLastSection(True)
-        examples.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for row, item in enumerate(matches[:6]):
-            examples.setItem(row, 0, QTableWidgetItem(
-                " / ".join((*item.source_row_path, *item.source_column_path))
-            ))
-            examples.setItem(row, 1, QTableWidgetItem(
-                " / ".join((*item.target_row_path, *item.target_column_path))
-            ))
-        root.addWidget(examples)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.viewer = DualSheetViewer()
+        self.viewer.load_pair(
+            Path(match.source_file), match.source_sheet,
+            Path(match.target_file), match.target_sheet,
+        )
+        splitter.addWidget(self.viewer)
+        mapping_box = QFrame()
+        mapping_layout = QVBoxLayout(mapping_box)
+        self.mapping_rows = self._grouped_mapping_rows(matches)
+        mapping_layout.addWidget(QLabel(
+            f"本工作表的数据对应关系（共 {len(matches)} 个数据位置）"
+        ))
+        self.mapping_table = QTableWidget(len(self.mapping_rows), 6)
+        self.mapping_table.setHorizontalHeaderLabels(
+            ["来源区域", "来源项目", "目标区域", "目标项目", "数量", "状态"]
+        )
+        self.mapping_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.mapping_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.mapping_table.horizontalHeader().setStretchLastSection(True)
+        for row, entry in enumerate(self.mapping_rows):
+            source_cells, target_cells, source_label, target_label, status = entry
+            values = (
+                format_cell_addresses(source_cells), source_label,
+                format_cell_addresses(target_cells), target_label,
+                str(len(source_cells)), status,
+            )
+            for column, value in enumerate(values):
+                self.mapping_table.setItem(row, column, QTableWidgetItem(value))
+        self.mapping_table.cellClicked.connect(self.locate_mapping_row)
+        mapping_layout.addWidget(self.mapping_table, 1)
+        splitter.addWidget(mapping_box)
+        splitter.setSizes([560, 240])
+        root.addWidget(splitter, 1)
         actions = QHBoxLayout()
         skip = QPushButton("本次不填写")
         skip.clicked.connect(lambda: self.finish("skip"))
@@ -196,49 +218,40 @@ class ReviewDialog(QDialog):
         actions.addWidget(accept)
         root.addLayout(actions)
 
-    def _preview(self, title: str, path: Path, sheet: str, address: str) -> QWidget:
-        box = QFrame()
-        box.setObjectName("previewBox")
-        layout = QVBoxLayout(box)
-        heading = QLabel(f"{title}\n{path.name} / {sheet}")
-        heading.setObjectName("fieldLabel")
-        layout.addWidget(heading)
-        table = QTableWidget(7, 7)
-        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        table.horizontalHeader().setVisible(False)
-        table.verticalHeader().setVisible(False)
-        reader = None
-        try:
-            reader = WorkbookReader(path)
-            from excel_mapper import split_address
-            row, col = split_address(address) if address else (0, 0)
-            for rr in range(7):
-                for cc in range(7):
-                    real_row, real_col = max(0, row - 3) + rr, max(0, col - 3) + cc
-                    letters = ""
-                    n = real_col + 1
-                    while n:
-                        n, rem = divmod(n - 1, 26)
-                        letters = chr(65 + rem) + letters
-                    cell_address = f"{letters}{real_row + 1}"
-                    value = reader.read(sheet, cell_address).value
-                    item = QTableWidgetItem("" if value is None else str(value))
-                    if cell_address == address:
-                        item.setBackground(QColor("#FFF0EE"))
-                        item.setForeground(QColor("#B42318"))
-                    table.setItem(rr, cc, item)
-            table.resizeColumnsToContents()
-        except Exception as exc:
-            table.setItem(0, 0, QTableWidgetItem(f"无法预览：{exc}"))
-        finally:
-            if reader:
-                reader.close()
-        layout.addWidget(table, 1)
-        return box
+    @staticmethod
+    def _grouped_mapping_rows(matches: list[SmartMatch]):
+        grouped: dict[tuple[tuple[str, ...], tuple[str, ...], str], tuple[list[str], list[str]]] = {}
+        for item in matches:
+            key = (item.source_column_path, item.target_column_path, item.status)
+            source_cells, target_cells = grouped.setdefault(key, ([], []))
+            source_cells.append(item.source_address)
+            target_cells.append(item.target_address)
+        rows = []
+        for (source_path, target_path, status), (source_cells, target_cells) in grouped.items():
+            rows.append((
+                source_cells, target_cells,
+                " / ".join(source_path) or "按行名识别",
+                " / ".join(target_path) or "按行名识别",
+                status,
+            ))
+        return rows
+
+    def locate_mapping_row(self, row: int, _column: int) -> None:
+        source_cells, target_cells, *_ = self.mapping_rows[row]
+        self.viewer.source.select_addresses(source_cells)
+        self.viewer.target.select_addresses(target_cells)
+        if source_cells:
+            self.viewer.source.scroll_to_address(source_cells[0])
+        if target_cells:
+            self.viewer.target.scroll_to_address(target_cells[0])
 
     def finish(self, answer: str) -> None:
         self.answer = answer
         self.accept()
+
+    def closeEvent(self, event) -> None:
+        self.viewer.close()
+        super().closeEvent(event)
 
 
 class SmartMappingWindow(QMainWindow):
@@ -464,7 +477,7 @@ class SmartMappingWindow(QMainWindow):
     def _pending_groups(self) -> list[list[SmartMatch]]:
         if not self.plan:
             return []
-        grouped: dict[tuple[str, str, str, str], list[SmartMatch]] = {}
+        pending_keys: set[tuple[str, str, str, str]] = set()
         for match in self.plan.matches:
             if match.status != "待确认":
                 continue
@@ -472,7 +485,17 @@ class SmartMappingWindow(QMainWindow):
                 match.source_file, match.source_sheet,
                 match.target_file, match.target_sheet,
             )
-            grouped.setdefault(key, []).append(match)
+            pending_keys.add(key)
+        grouped: dict[tuple[str, str, str, str], list[SmartMatch]] = {
+            key: [] for key in pending_keys
+        }
+        for match in self.plan.matches:
+            key = (
+                match.source_file, match.source_sheet,
+                match.target_file, match.target_sheet,
+            )
+            if key in grouped and match.target_address:
+                grouped[key].append(match)
         return list(grouped.values())
 
     def review_pending(self) -> None:
@@ -484,8 +507,9 @@ class SmartMappingWindow(QMainWindow):
             dialog.exec()
             for match in matches:
                 if dialog.answer == "accept":
-                    match.enabled = bool(match.target_address)
-                    match.status = "工作表已确认"
+                    if match.status == "待确认":
+                        match.enabled = bool(match.target_address)
+                        match.status = "工作表已确认"
                 else:
                     match.enabled = False
                     match.status = "本次不填写"
