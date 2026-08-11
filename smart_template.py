@@ -631,3 +631,4 @@ def load_plan(path: Path) -> SmartTemplatePlan:
     raw["formula_rules"] = [FormulaRule(**item) for item in raw.get("formula_rules", [])]
     raw["block_rules"] = [BlockRule(**item) for item in raw.get("block_rules", [])]
     return SmartTemplatePlan(**raw)
+

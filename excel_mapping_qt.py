@@ -551,7 +551,6 @@ class ExcelMappingQtWindow(QMainWindow):
         self._output_folder_manually_selected = False
         self._refreshing = False
         self._shortcuts: list[QShortcut] = []
-        self._smart_window = None
 
         self.setWindowTitle("Excel 单元格映射工具")
         icon_path = bundled_asset("assets/excel-mapper.ico")
@@ -663,10 +662,6 @@ class ExcelMappingQtWindow(QMainWindow):
         subtitle.setObjectName("pageSubtitle")
         title_box.addWidget(subtitle)
         header_line.addLayout(title_box, 1)
-        smart = QPushButton("智能模板填报")
-        smart.setObjectName("primaryButton")
-        smart.clicked.connect(self.open_smart_template)
-        header_line.addWidget(smart)
         for text, callback, object_name in (
             ("导入映射表", self.import_scheme, ""),
             ("导出映射表", self.export_scheme, ""),
@@ -800,17 +795,6 @@ class ExcelMappingQtWindow(QMainWindow):
         )
         paste_shortcut.activated.connect(self.paste_selection)
         self._shortcuts.append(paste_shortcut)
-
-    def open_smart_template(self) -> None:
-        from smart_template_qt import SmartTemplateWindow
-
-        if self._smart_window is None:
-            self._smart_window = SmartTemplateWindow(
-                self._application_style()
-            )
-        self._smart_window.show()
-        self._smart_window.raise_()
-        self._smart_window.activateWindow()
 
     def active_rules(self) -> list[MappingRule]:
         return [rule for rule in self.rules if not mapping_rule_is_blank(rule)]
