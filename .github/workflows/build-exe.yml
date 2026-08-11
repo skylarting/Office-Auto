@@ -8,11 +8,14 @@ on:
       - "excel_mapper.py"
       - "excel_mapping_tool.py"
       - "excel_mapping_qt.py"
+      - "smart_template.py"
+      - "smart_template_qt.py"
       - "build_qt_icon.py"
       - "assets/excel-mapper.ico"
       - "test_export_summary.py"
       - "test_excel_mapper.py"
       - "test_excel_mapping_qt.py"
+      - "test_smart_template.py"
       - ".github/workflows/build-exe.yml"
 
 jobs:
@@ -56,6 +59,8 @@ jobs:
           --exclude-module PySide6.QtSql
           --exclude-module PySide6.QtTest
           --exclude-module PySide6.QtXml
+          --hidden-import smart_template
+          --hidden-import smart_template_qt
           --icon assets/excel-mapper.ico
           --add-data "assets/excel-mapper.ico;assets"
           --name ExcelMappingQt
