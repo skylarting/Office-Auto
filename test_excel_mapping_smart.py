@@ -44,6 +44,19 @@ class SmartWizardTests(unittest.TestCase):
         self.assertIn("智能报表助手", window.windowTitle())
         window.close()
 
+    def test_pending_cells_are_grouped_by_sheet_pair(self):
+        window = SmartMappingWindow()
+        from smart_template import SmartMatch, SmartTemplatePlan
+        window.plan = SmartTemplatePlan(matches=[
+            SmartMatch("a.xlsx", "数据", "A1", (), (), "b.xlsx", "报表", "B1", (), (), .7, "待确认"),
+            SmartMatch("a.xlsx", "数据", "A2", (), (), "b.xlsx", "报表", "B2", (), (), .7, "待确认"),
+            SmartMatch("c.xlsx", "其他", "A1", (), (), "b.xlsx", "其他", "B1", (), (), .7, "待确认"),
+        ])
+        groups = window._pending_groups()
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(sorted(map(len, groups)), [1, 2])
+        window.close()
+
     def test_learning_plan_can_save_load_and_execute_copy(self):
         with TemporaryDirectory() as folder:
             root = Path(folder)

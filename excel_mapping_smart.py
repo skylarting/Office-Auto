@@ -146,23 +146,23 @@ class FileField(QWidget):
 
 
 class ReviewDialog(QDialog):
-    """Ask one plain-language question while showing both cell neighborhoods."""
-    def __init__(self, parent, match: SmartMatch, index: int, total: int) -> None:
+    """Confirm one source-sheet/target-sheet pair, never one cell at a time."""
+    def __init__(self, parent, matches: list[SmartMatch], index: int, total: int) -> None:
         super().__init__(parent)
-        self.match = match
+        self.matches = matches
+        self.match = matches[0]
         self.answer = "skip"
-        self.setWindowTitle(f"确认数据对应关系（{index}/{total}）")
+        self.setWindowTitle(f"确认工作表对应关系（{index}/{total}）")
         self.resize(1050, 620)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
-        question = QLabel("请比较左右两个项目，它们是否表示同一项？")
+        question = QLabel("请确认左右两张工作表是否对应")
         question.setObjectName("dialogTitle")
         root.addWidget(question)
+        match = self.match
         detail = QLabel(
-            f"左侧：{match.row_text if hasattr(match, 'row_text') else ' / '.join(match.source_row_path)}  ·  "
-            f"{' / '.join(match.source_column_path)}\n"
-            f"右侧：{' / '.join(match.target_row_path) or '程序建议位置'}  ·  "
-            f"{' / '.join(match.target_column_path)}"
+            f"程序在这两张工作表中找到了 {len(matches)} 个待确认的数据位置。\n"
+            "确认工作表对应后，这些位置将按行名和列名自动对应，不需要逐个点击。"
         )
         detail.setObjectName("secondaryText")
         root.addWidget(detail)
@@ -170,15 +170,27 @@ class ReviewDialog(QDialog):
         grids.addWidget(self._preview("来源数据", Path(match.source_file), match.source_sheet, match.source_address), 1)
         grids.addWidget(self._preview("要填写的报表", Path(match.target_file), match.target_sheet, match.target_address), 1)
         root.addLayout(grids, 1)
+        examples = QTableWidget(min(len(matches), 6), 2)
+        examples.setHorizontalHeaderLabels(["来源项目示例", "目标项目示例"])
+        examples.horizontalHeader().setStretchLastSection(True)
+        examples.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for row, item in enumerate(matches[:6]):
+            examples.setItem(row, 0, QTableWidgetItem(
+                " / ".join((*item.source_row_path, *item.source_column_path))
+            ))
+            examples.setItem(row, 1, QTableWidgetItem(
+                " / ".join((*item.target_row_path, *item.target_column_path))
+            ))
+        root.addWidget(examples)
         actions = QHBoxLayout()
         skip = QPushButton("本次不填写")
         skip.clicked.connect(lambda: self.finish("skip"))
         actions.addWidget(skip)
         actions.addStretch(1)
-        reject = QPushButton("不是，暂不对应")
+        reject = QPushButton("不是，这两张表不对应")
         reject.clicked.connect(lambda: self.finish("reject"))
         actions.addWidget(reject)
-        accept = QPushButton("是，确认对应")
+        accept = QPushButton(f"是，确认整张表对应（{len(matches)} 项）")
         accept.setObjectName("primaryButton")
         accept.clicked.connect(lambda: self.finish("accept"))
         actions.addWidget(accept)
@@ -428,14 +440,20 @@ class SmartMappingWindow(QMainWindow):
 
     def show_check(self, title: str) -> None:
         assert self.plan is not None
-        auto, pending, missing, formulas = candidate_matches(self.plan)
+        auto, pending_cells, missing, formulas = candidate_matches(self.plan)
+        pending_groups = self._pending_groups()
+        pending = len(pending_groups)
         self.check_title.setText(title)
         for widget, value in zip(self.metric_labels, (auto, pending, missing, formulas)):
             widget.setText(str(value))
         self.check_detail.clear()
         self.check_detail.addItem(f"找到 {len(self.plan.source_files)} 个数据文件")
         self.check_detail.addItem(f"识别到 {len(self.plan.pairs)} 组工作表对应关系")
-        self.check_detail.addItem(f"预计填写 {auto + pending} 个单元格")
+        self.check_detail.addItem(f"预计填写 {auto + pending_cells} 个单元格")
+        if pending:
+            self.check_detail.addItem(
+                f"只需确认 {pending} 组工作表对应关系，涉及 {pending_cells} 个数据位置"
+            )
         self.check_detail.addItem("目标报表中的已有公式默认保持不变")
         self.review_button.setEnabled(pending > 0)
         self.review_button.setText(f"查看需要确认的项目（{pending}）")
@@ -443,17 +461,34 @@ class SmartMappingWindow(QMainWindow):
         self.progress.setValue(0)
         self.stack.setCurrentWidget(self.check)
 
+    def _pending_groups(self) -> list[list[SmartMatch]]:
+        if not self.plan:
+            return []
+        grouped: dict[tuple[str, str, str, str], list[SmartMatch]] = {}
+        for match in self.plan.matches:
+            if match.status != "待确认":
+                continue
+            key = (
+                match.source_file, match.source_sheet,
+                match.target_file, match.target_sheet,
+            )
+            grouped.setdefault(key, []).append(match)
+        return list(grouped.values())
+
     def review_pending(self) -> None:
         if not self.plan:
             return
-        pending = [m for m in self.plan.matches if m.status == "待确认"]
-        for index, match in enumerate(pending, 1):
-            dialog = ReviewDialog(self, match, index, len(pending))
+        groups = self._pending_groups()
+        for index, matches in enumerate(groups, 1):
+            dialog = ReviewDialog(self, matches, index, len(groups))
             dialog.exec()
-            if dialog.answer == "accept":
-                match.enabled = bool(match.target_address); match.status = "人工确认"
-            else:
-                match.enabled = False; match.status = "本次不填写"
+            for match in matches:
+                if dialog.answer == "accept":
+                    match.enabled = bool(match.target_address)
+                    match.status = "工作表已确认"
+                else:
+                    match.enabled = False
+                    match.status = "本次不填写"
         if self.active_plan_file:
             save_plan(self.active_plan_file, self.plan)
         self.show_check("确认完成")
