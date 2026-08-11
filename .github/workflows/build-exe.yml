@@ -1,4 +1,4 @@
-name: Build ExcelMappingSmart EXE
+name: Build ExcelMappingStudio EXE
 
 on:
   workflow_dispatch:
@@ -7,6 +7,7 @@ on:
       - "excel_mapper.py"
       - "excel_mapping_qt.py"
       - "excel_mapping_smart.py"
+      - "excel_mapping_studio.py"
       - "excel_sheet_viewer.py"
       - "smart_template.py"
       - "build_qt_icon.py"
@@ -14,6 +15,7 @@ on:
       - "test_excel_mapper.py"
       - "test_excel_mapping_qt.py"
       - "test_excel_mapping_smart.py"
+      - "test_excel_mapping_studio.py"
       - ".github/workflows/build-exe.yml"
 
 jobs:
@@ -38,7 +40,7 @@ jobs:
       - name: Run tests
         run: python -m unittest -v
 
-      - name: Build ExcelMappingSmart EXE
+      - name: Build ExcelMappingStudio EXE
         run: >
           python -m PyInstaller
           --noconfirm
@@ -59,12 +61,12 @@ jobs:
           --exclude-module PySide6.QtXml
           --icon assets/excel-mapper.ico
           --add-data "assets/excel-mapper.ico;assets"
-          --name ExcelMappingSmart
-          excel_mapping_smart.py
+          --name ExcelMappingStudio
+          excel_mapping_studio.py
 
-      - name: Upload ExcelMappingSmart EXE
+      - name: Upload ExcelMappingStudio EXE
         uses: actions/upload-artifact@v4
         with:
-          name: ExcelMappingSmart-Windows
-          path: dist/ExcelMappingSmart.exe
+          name: ExcelMappingStudio-Windows
+          path: dist/ExcelMappingStudio.exe
           if-no-files-found: error

@@ -169,7 +169,9 @@ class SheetViewPane(QFrame):
 
         self.table = QTableView()
         self.table.setItemDelegate(RedOutlineDelegate(self.table))
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # MultiSelection makes an ordinary click toggle one cell, matching the
+        # behavior business users expect from the earlier mapping picker.
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(False)

@@ -7,6 +7,22 @@ Windows Excel 单元格批量汇总工具。
 - `ExcelSummary.exe`：从一个或多个工作簿提取指定单元格并生成汇总；
 - `ExcelMapper.exe`：把多个来源工作簿的指定单元格映射到多个目标工作簿。
 - `ExcelMappingSmart.exe`：面向普通业务人员的智能报表生成向导。
+- `ExcelMappingStudio.exe`：把智能工作表识别和双表人工精确选择合并在同一流程中。
+
+## ExcelMappingStudio 合并工作台
+
+新工作台不会修改现有 `ExcelMappingQt`。使用流程为：
+
+1. 一次添加全部来源文件和目标文件；选错文件身份时，选中文件并点击
+   “转换为另一侧”；
+2. 程序按文件名、工作表名和多级行列标题生成可编辑的工作表对应列表；
+3. 双击任意一行打开双表完整查看器；右键该行可以重新选择来源/目标工作簿和
+   工作表；
+4. 查看器中的智能红框只是初始建议。用户可以单击、拖动或使用公式、数值、
+   文字、底色等批量按钮修改；再次点击已激活的条件会取消该类选择；
+5. 点击“保存这组对应关系”时，只读取界面上最终保留的来源和目标单元格，智能
+   建议不会再次覆盖人工结果；
+6. 两边数量必须相同。程序按当前单元格顺序建立一一对应，并始终生成目标副本。
 
 ## ExcelMappingSmart 小白向导
 
@@ -217,6 +233,6 @@ Excel 方案表固定使用五列：
 
 ## 构建 Windows EXE
 
-当前推送到 GitHub 后，`Build ExcelMappingSmart EXE` 工作流只运行测试并生成
-`ExcelMappingSmart.exe`，在 Actions 运行页面底部下载
-`ExcelMappingSmart-Windows` 构建产物即可。
+当前推送到 GitHub 后，`Build ExcelMappingStudio EXE` 工作流只运行测试并生成
+`ExcelMappingStudio.exe`，在 Actions 运行页面底部下载
+`ExcelMappingStudio-Windows` 构建产物即可。
