@@ -114,6 +114,14 @@ class RedOutlineDelegate(QStyledItemDelegate):
             QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0))
         )
         clean.palette.setBrush(
+            QPalette.ColorGroup.Inactive, QPalette.ColorRole.Highlight,
+            QBrush(QColor(0, 0, 0, 0)),
+        )
+        clean.palette.setBrush(
+            QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight,
+            QBrush(QColor(0, 0, 0, 0)),
+        )
+        clean.palette.setBrush(
             QPalette.ColorRole.HighlightedText,
             clean.palette.brush(QPalette.ColorRole.Text),
         )
@@ -192,6 +200,8 @@ class SheetViewPane(QFrame):
         # style sheet/palette from adding a blue selection fill underneath it.
         palette = self.table.palette()
         palette.setBrush(QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0)))
+        palette.setBrush(QPalette.ColorGroup.Inactive, QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0)))
+        palette.setBrush(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0)))
         palette.setBrush(QPalette.ColorRole.HighlightedText, palette.brush(QPalette.ColorRole.Text))
         self.table.setPalette(palette)
         self.table.setStyleSheet(
@@ -332,7 +342,9 @@ class DualSheetViewer(QWidget):
         self.zoom_label = QLabel("100%")
         top.addWidget(self.zoom_label)
         top.addStretch(1)
-        root.addLayout(top)
+        self.controls_widget = QWidget()
+        self.controls_widget.setLayout(top)
+        root.addWidget(self.controls_widget)
         panes = QHBoxLayout()
         self.source = SheetViewPane("来源数据")
         self.target = SheetViewPane("要填写的报表")

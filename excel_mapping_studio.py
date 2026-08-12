@@ -7,12 +7,12 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
     QGridLayout, QMenu, QMessageBox, QProgressBar, QPushButton, QInputDialog, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 # The Qt build intentionally excludes Tk/Tcl. Import the Qt compatibility
@@ -744,11 +744,13 @@ class StudioWindow(QMainWindow):
         self.mappings: list[WorksheetMapping] = []
         self.current_row = -1
         self.loading_viewer = False
+        self.same_position_default = True
 
         central = QWidget(); self.setCentralWidget(central)
         root = QVBoxLayout(central); root.setContentsMargins(18, 14, 18, 14); root.setSpacing(10)
         heading = QLabel("Excel 工作表映射工具"); heading.setObjectName("pageTitle")
         root.addWidget(heading)
+        self.build_menu_bar()
 
         folder_line = QHBoxLayout()
         folder_line.addWidget(QLabel("默认工作文件夹："))
@@ -761,13 +763,15 @@ class StudioWindow(QMainWindow):
         folder_line.addWidget(scan)
         root.addLayout(folder_line)
 
+        upper = QWidget(); upper_layout = QVBoxLayout(upper)
+        upper_layout.setContentsMargins(0, 0, 0, 0); upper_layout.setSpacing(6)
         map_header = QHBoxLayout()
         title = QLabel("工作表对应关系"); title.setObjectName("sectionTitle")
         map_header.addWidget(title); map_header.addStretch(1)
         add = QPushButton("添加对应"); add.clicked.connect(self.add_blank_mapping); map_header.addWidget(add)
         remove = QPushButton("删除选中"); remove.clicked.connect(self.remove_selected); map_header.addWidget(remove)
         clear = QPushButton("清空列表"); clear.clicked.connect(self.clear_mappings); map_header.addWidget(clear)
-        root.addLayout(map_header)
+        upper_layout.addLayout(map_header)
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
@@ -781,28 +785,42 @@ class StudioWindow(QMainWindow):
         self.table.setColumnWidth(2, 145); self.table.setColumnWidth(3, 34)
         self.table.setColumnWidth(4, 250); self.table.setColumnWidth(5, 175)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setMinimumHeight(105); self.table.setMaximumHeight(230)
+        self.table.setMinimumHeight(72)
         self.table.cellClicked.connect(self.mapping_cell_clicked)
-        root.addWidget(self.table)
+        upper_layout.addWidget(self.table)
 
+        lower = QWidget(); lower_layout = QVBoxLayout(lower)
+        lower_layout.setContentsMargins(0, 0, 0, 0); lower_layout.setSpacing(6)
         current_line = QHBoxLayout()
         self.current_label = QLabel("请在上方选择一组完整的工作表对应关系")
         self.current_label.setObjectName("sectionTitle")
         current_line.addWidget(self.current_label); current_line.addStretch(1)
         previous = QPushButton("上一组"); previous.clicked.connect(lambda: self.move_current(-1)); current_line.addWidget(previous)
         following = QPushButton("下一组"); following.clicked.connect(lambda: self.move_current(1)); current_line.addWidget(following)
-        root.addLayout(current_line)
+        lower_layout.addLayout(current_line)
 
         self.viewer = DualSheetViewer(); self.viewer.setEnabled(False)
         self.viewer.target.add_toolbar_button("使用来源单元格位置", self.use_same_positions)
-        self.viewer.source.selection_changed.connect(lambda _items: self.selection_changed())
+        self.viewer.source.selection_changed.connect(lambda _items: self.source_selection_changed())
         self.viewer.target.selection_changed.connect(lambda _items: self.selection_changed())
-        root.addWidget(self.viewer, 1)
+        self.viewer.controls_widget.hide()
+        lower_layout.addWidget(self.viewer, 1)
 
-        self.selection_summary = QLabel("来源：尚未选择    目标：尚未选择")
-        self.selection_summary.setObjectName("secondaryText")
-        self.selection_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(self.selection_summary)
+        self.source_summary = QLabel("来源（0）：尚未选择")
+        self.target_summary = QLabel("目标（0）：尚未选择")
+        for label in (self.source_summary, self.target_summary):
+            label.setObjectName("secondaryText")
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            lower_layout.addWidget(label)
+
+        self.workspace_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.workspace_splitter.addWidget(upper)
+        self.workspace_splitter.addWidget(lower)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.setStretchFactor(0, 0)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.setSizes([110, 650])
+        root.addWidget(self.workspace_splitter, 1)
 
         execute = QFrame(); execute.setObjectName("summaryPanel")
         execute_layout = QGridLayout(execute)
@@ -819,11 +837,56 @@ class StudioWindow(QMainWindow):
         run.clicked.connect(self.run_mapping); execute_layout.addWidget(run, 0, 2, 2, 1)
         root.addWidget(execute)
 
+    def build_menu_bar(self) -> None:
+        file_menu = self.menuBar().addMenu("文件")
+        choose_folder = file_menu.addAction("选择默认工作文件夹…")
+        choose_folder.triggered.connect(self.choose_default_folder)
+        file_menu.addSeparator()
+        quit_action = file_menu.addAction("退出")
+        quit_action.triggered.connect(self.close)
+
+        function_menu = self.menuBar().addMenu("功能")
+        mapping_action = function_menu.addAction("工作表数据映射")
+        mapping_action.setCheckable(True); mapping_action.setChecked(True)
+        summary_action = function_menu.addAction("工作表数据汇总（待接入）")
+        summary_action.setEnabled(False)
+
+        view_menu = self.menuBar().addMenu("视图")
+        self.sync_scroll_action = view_menu.addAction("同步滚动")
+        self.sync_scroll_action.setCheckable(True); self.sync_scroll_action.setChecked(True)
+        self.sync_scroll_action.toggled.connect(self.viewer_link_scroll_changed)
+        self.sync_zoom_action = view_menu.addAction("同步缩放")
+        self.sync_zoom_action.setCheckable(True); self.sync_zoom_action.setChecked(True)
+        self.sync_zoom_action.toggled.connect(self.viewer_link_zoom_changed)
+        fit_action = view_menu.addAction("适应窗口")
+        fit_action.triggered.connect(lambda: self.viewer.fit_both() if hasattr(self, "viewer") else None)
+        view_menu.addSeparator()
+        collapse_action = view_menu.addAction("工作表对应列表只显示一行")
+        collapse_action.triggered.connect(self.collapse_mapping_list)
+
+        settings_menu = self.menuBar().addMenu("设置")
+        self.same_position_action = settings_menu.addAction("目标默认使用来源单元格位置")
+        self.same_position_action.setCheckable(True); self.same_position_action.setChecked(True)
+        self.same_position_action.toggled.connect(lambda checked: setattr(self, "same_position_default", checked))
+
+    def viewer_link_scroll_changed(self, checked: bool) -> None:
+        if hasattr(self, "viewer"): self.viewer.link_scroll.setChecked(checked)
+
+    def viewer_link_zoom_changed(self, checked: bool) -> None:
+        if hasattr(self, "viewer"): self.viewer.link_zoom.setChecked(checked)
+
+    def collapse_mapping_list(self) -> None:
+        if hasattr(self, "workspace_splitter"):
+            self.workspace_splitter.setSizes([82, max(self.height() - 200, 500)])
+
     def all_files(self) -> list[Path]:
         values = list(self.known_files)
         for mapping in self.mappings:
-            values.extend([Path(mapping.source_file), Path(mapping.target_file)])
-        return list(dict.fromkeys(path.resolve() for path in values if str(path)))
+            if mapping.source_file:
+                values.append(Path(mapping.source_file))
+            if mapping.target_file:
+                values.append(Path(mapping.target_file))
+        return list(dict.fromkeys(path.resolve() for path in values))
 
     def choose_default_folder(self) -> None:
         value = QFileDialog.getExistingDirectory(
@@ -940,15 +1003,15 @@ class StudioWindow(QMainWindow):
         if self.default_folder:
             default_paths = [path for path in paths if path.parent == self.default_folder.resolve()]
             if default_paths:
-                heading = menu.addAction("默认工作文件夹"); heading.setEnabled(False)
+                heading = menu.addAction("默认文件夹"); heading.setEnabled(False)
                 for path in default_paths:
-                    action = menu.addAction(path.name); action.setData(str(path))
+                    action = menu.addAction(f"    {path.name}"); action.setData(str(path)); action.setToolTip(str(path))
                 menu.addSeparator()
         outside = [path for path in paths if not self.default_folder or path.parent != self.default_folder.resolve()]
         if outside:
-            heading = menu.addAction("当前方案使用的其他文件"); heading.setEnabled(False)
+            heading = menu.addAction("其他位置"); heading.setEnabled(False)
             for path in outside:
-                action = menu.addAction(path.name); action.setData(str(path))
+                action = menu.addAction(f"    {path.name}"); action.setData(str(path)); action.setToolTip(str(path))
             menu.addSeparator()
         browse = menu.addAction("选择其他文件夹中的表格…")
         clear = menu.addAction("清空选择")
@@ -1038,10 +1101,25 @@ class StudioWindow(QMainWindow):
         if self.loading_viewer: return
         self.save_current_selection(); self.refresh_selection_summary(); self.refresh_table()
 
+    def source_selection_changed(self) -> None:
+        if self.loading_viewer:
+            return
+        if self.same_position_default:
+            self.loading_viewer = True
+            try:
+                self.viewer.target.select_addresses(
+                    self.viewer.source.selected_addresses()
+                )
+            finally:
+                self.loading_viewer = False
+        self.selection_changed()
+
     def refresh_selection_summary(self) -> None:
         sources = self.viewer.source.selected_addresses(); targets = self.viewer.target.selected_addresses()
-        self.selection_summary.setText(
-            f"来源（{len(sources)}）：{format_cell_addresses(sources) or '尚未选择'}    "
+        self.source_summary.setText(
+            f"来源（{len(sources)}）：{format_cell_addresses(sources) or '尚未选择'}"
+        )
+        self.target_summary.setText(
             f"目标（{len(targets)}）：{format_cell_addresses(targets) or '尚未选择'}"
         )
 
