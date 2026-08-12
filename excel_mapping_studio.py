@@ -787,6 +787,8 @@ class StudioWindow(QMainWindow):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setMinimumHeight(72)
         self.table.cellClicked.connect(self.mapping_cell_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.mapping_context_menu)
         upper_layout.addWidget(self.table)
 
         lower = QWidget(); lower_layout = QVBoxLayout(lower)
@@ -797,6 +799,15 @@ class StudioWindow(QMainWindow):
         current_line.addWidget(self.current_label); current_line.addStretch(1)
         previous = QPushButton("上一组"); previous.clicked.connect(lambda: self.move_current(-1)); current_line.addWidget(previous)
         following = QPushButton("下一组"); following.clicked.connect(lambda: self.move_current(1)); current_line.addWidget(following)
+        current_line.addSpacing(16); current_line.addWidget(QLabel("缩放"))
+        zoom_out = QPushButton("−"); zoom_out.setObjectName("squareButton")
+        zoom_out.clicked.connect(lambda: self.change_zoom(-10)); current_line.addWidget(zoom_out)
+        self.zoom_button = QPushButton("100%"); self.zoom_button.setObjectName("compactButton")
+        self.zoom_button.clicked.connect(lambda: self.set_zoom(100)); current_line.addWidget(self.zoom_button)
+        zoom_in = QPushButton("+"); zoom_in.setObjectName("squareButton")
+        zoom_in.clicked.connect(lambda: self.change_zoom(10)); current_line.addWidget(zoom_in)
+        fit = QPushButton("适应"); fit.setObjectName("compactButton")
+        fit.clicked.connect(self.fit_viewer); current_line.addWidget(fit)
         lower_layout.addLayout(current_line)
 
         self.viewer = DualSheetViewer(); self.viewer.setEnabled(False)
@@ -836,6 +847,7 @@ class StudioWindow(QMainWindow):
         run = QPushButton("生成报表副本"); run.setObjectName("primaryButton")
         run.clicked.connect(self.run_mapping); execute_layout.addWidget(run, 0, 2, 2, 1)
         root.addWidget(execute)
+        self.add_blank_mapping()
 
     def build_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("文件")
@@ -850,6 +862,17 @@ class StudioWindow(QMainWindow):
         mapping_action.setCheckable(True); mapping_action.setChecked(True)
         summary_action = function_menu.addAction("工作表数据汇总（待接入）")
         summary_action.setEnabled(False)
+
+        edit_menu = self.menuBar().addMenu("编辑")
+        add_action = edit_menu.addAction("添加一组")
+        add_action.triggered.connect(self.add_blank_mapping)
+        copy_action = edit_menu.addAction("复制选中关系")
+        copy_action.setShortcut("Ctrl+C"); copy_action.triggered.connect(self.copy_selected_mappings)
+        delete_action = edit_menu.addAction("删除选中关系")
+        delete_action.setShortcut("Delete"); delete_action.triggered.connect(self.remove_selected)
+        edit_menu.addSeparator()
+        clear_cells_action = edit_menu.addAction("清空选中关系的单元格")
+        clear_cells_action.triggered.connect(self.clear_selected_cells)
 
         view_menu = self.menuBar().addMenu("视图")
         self.sync_scroll_action = view_menu.addAction("同步滚动")
@@ -878,6 +901,18 @@ class StudioWindow(QMainWindow):
     def collapse_mapping_list(self) -> None:
         if hasattr(self, "workspace_splitter"):
             self.workspace_splitter.setSizes([82, max(self.height() - 200, 500)])
+
+    def change_zoom(self, delta: int) -> None:
+        self.set_zoom(self.viewer.zoom_slider.value() + delta)
+
+    def set_zoom(self, value: int) -> None:
+        value = max(40, min(180, value))
+        self.viewer.set_zoom(value)
+        self.zoom_button.setText(f"{value}%")
+
+    def fit_viewer(self) -> None:
+        self.viewer.fit_both()
+        self.zoom_button.setText(f"{self.viewer.zoom_slider.value()}%")
 
     def all_files(self) -> list[Path]:
         values = list(self.known_files)
@@ -964,6 +999,14 @@ class StudioWindow(QMainWindow):
                 self.table.setItem(row, column, item)
         self.table.blockSignals(False)
 
+    @staticmethod
+    def mapping_is_blank(mapping: WorksheetMapping) -> bool:
+        return not any((mapping.source_file, mapping.source_sheet, mapping.target_file, mapping.target_sheet, mapping.source_cells, mapping.target_cells))
+
+    def ensure_blank_draft(self) -> None:
+        if not self.mappings or not self.mapping_is_blank(self.mappings[-1]):
+            self.mappings.append(WorksheetMapping("", "", "", ""))
+
     def add_blank_mapping(self) -> None:
         self.save_current_selection()
         self.mappings.append(WorksheetMapping("", "", "", ""))
@@ -976,6 +1019,7 @@ class StudioWindow(QMainWindow):
         ) != QMessageBox.StandardButton.Yes:
             return
         self.mappings.clear(); self.current_row = -1; self.refresh_table()
+        self.ensure_blank_draft(); self.refresh_table()
         self.viewer.setEnabled(False); self.current_label.setText("请添加或选择一组工作表对应关系")
 
     def remove_selected(self) -> None:
@@ -984,8 +1028,67 @@ class StudioWindow(QMainWindow):
         self.save_current_selection()
         for row in rows: self.mappings.pop(row)
         self.current_row = -1; self.refresh_table()
-        if self.mappings: self.load_mapping(min(rows[-1], len(self.mappings) - 1))
+        self.ensure_blank_draft(); self.refresh_table()
+        if self.mappings and not self.mapping_is_blank(self.mappings[0]): self.load_mapping(min(rows[-1], len(self.mappings) - 1))
         else: self.viewer.setEnabled(False)
+
+    def selected_rows(self) -> list[int]:
+        return sorted({index.row() for index in self.table.selectedIndexes()})
+
+    def copy_selected_mappings(self) -> None:
+        rows = self.selected_rows()
+        if not rows:
+            return
+        insert_at = len(self.mappings) - 1 if self.mappings and self.mapping_is_blank(self.mappings[-1]) else len(self.mappings)
+        copies = []
+        for row in rows:
+            item = self.mappings[row]
+            if self.mapping_is_blank(item):
+                continue
+            copies.append(WorksheetMapping(
+                item.source_file, item.source_sheet, item.target_file, item.target_sheet,
+                list(item.source_cells), list(item.target_cells), item.score, item.enabled,
+            ))
+        self.mappings[insert_at:insert_at] = copies
+        self.ensure_blank_draft(); self.refresh_table()
+
+    def clear_selected_cells(self) -> None:
+        for row in self.selected_rows():
+            self.mappings[row].source_cells = []
+            self.mappings[row].target_cells = []
+        if self.current_row in self.selected_rows() and self.viewer.isEnabled():
+            self.viewer.source.clear_selection(); self.viewer.target.clear_selection()
+        self.refresh_table()
+
+    def mapping_context_menu(self, position) -> None:
+        row = self.table.rowAt(position.y())
+        if row < 0:
+            return
+        if row not in self.selected_rows():
+            self.table.selectRow(row)
+        menu = QMenu(self)
+        above = menu.addAction("在上方插入一组")
+        below = menu.addAction("在下方插入一组")
+        copy_action = menu.addAction("复制选中关系")
+        menu.addSeparator()
+        enable = menu.addAction("启用选中关系")
+        ignore = menu.addAction("暂时忽略选中关系")
+        clear_cells = menu.addAction("清空单元格选择")
+        menu.addSeparator(); delete = menu.addAction("删除选中关系")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(position))
+        if chosen == above:
+            self.mappings.insert(row, WorksheetMapping("", "", "", "")); self.refresh_table()
+        elif chosen == below:
+            self.mappings.insert(row + 1, WorksheetMapping("", "", "", "")); self.refresh_table()
+        elif chosen == copy_action:
+            self.copy_selected_mappings()
+        elif chosen in (enable, ignore):
+            for index in self.selected_rows(): self.mappings[index].enabled = chosen == enable
+            self.refresh_table()
+        elif chosen == clear_cells:
+            self.clear_selected_cells()
+        elif chosen == delete:
+            self.remove_selected()
 
     def mapping_cell_clicked(self, row: int, column: int) -> None:
         if column in (1, 4):
@@ -1040,6 +1143,7 @@ class StudioWindow(QMainWindow):
                 else:
                     mapping.target_sheet = best_name_match(mapping.source_sheet, sheets) or sheets[0]
         self.refresh_table(); self.load_mapping(row)
+        self.ensure_blank_draft(); self.refresh_table()
 
     def choose_sheet(self, row: int, source: bool) -> None:
         mapping = self.mappings[row]
@@ -1060,6 +1164,7 @@ class StudioWindow(QMainWindow):
         else: mapping.target_sheet = value
         mapping.source_cells = []; mapping.target_cells = []
         self.refresh_table(); self.load_mapping(row)
+        self.ensure_blank_draft(); self.refresh_table()
 
     def load_mapping(self, row: int) -> None:
         if row < 0 or row >= len(self.mappings): return
@@ -1138,10 +1243,11 @@ class StudioWindow(QMainWindow):
     def run_mapping(self) -> None:
         self.save_current_selection(); self.progress.setValue(0)
         try:
-            rules = mapping_rules_from_rows(self.mappings)
-            validate_studio_duplicate_targets(self.mappings)
-            source_files = list(dict.fromkeys(Path(item.source_file) for item in self.mappings if item.enabled))
-            target_files = list(dict.fromkeys(Path(item.target_file) for item in self.mappings if item.enabled))
+            active_mappings = [item for item in self.mappings if not self.mapping_is_blank(item)]
+            rules = mapping_rules_from_rows(active_mappings)
+            validate_studio_duplicate_targets(active_mappings)
+            source_files = list(dict.fromkeys(Path(item.source_file) for item in active_mappings if item.enabled))
+            target_files = list(dict.fromkeys(Path(item.target_file) for item in active_mappings if item.enabled))
             expanded, warnings = validate_mapping_plan(source_files, target_files, rules)
             if warnings and QMessageBox.question(self, "确认写入副本", f"目标副本中有 {len(warnings)} 个位置已有内容，是否继续？") != QMessageBox.StandardButton.Yes:
                 return
@@ -1174,6 +1280,9 @@ def application_style() -> str:
     QFrame#filePanel, QFrame#summaryPanel, QFrame#sheetPane { background: white; border: 1px solid #DDE3EC; border-radius: 9px; }
     QLineEdit, QComboBox, QListWidget, QTableWidget, QTableView { background: white; border: 1px solid #CBD5E1; border-radius: 5px; selection-background-color: #DCEAFF; selection-color: #172B4D; }
     QPushButton { background: white; border: 1px solid #B8C2D1; border-radius: 6px; padding: 8px 14px; }
+    QPushButton#compactButton { padding: 5px 10px; min-height: 22px; }
+    QPushButton#squareButton { padding: 4px; min-width: 28px; max-width: 32px; min-height: 26px; }
+    QToolButton { background: white; border: 1px solid #B8C2D1; border-radius: 5px; padding: 5px 10px; }
     QPushButton:hover { background: #F0F5FF; border-color: #7EA6E0; }
     QPushButton:checked { background: #EAF2FF; border-color: #2563EB; color: #175CD3; }
     QPushButton#primaryButton { background: #2563EB; color: white; border-color: #2563EB; font-weight: 600; }

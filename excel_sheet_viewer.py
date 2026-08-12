@@ -105,11 +105,16 @@ class RedOutlineDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option, index) -> None:
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         clean = QStyleOptionViewItem(option)
-        clean.state &= ~QStyle.StateFlag.State_Selected
-        clean.state &= ~QStyle.StateFlag.State_HasFocus
-        # Some platform styles still use Highlight after State_Selected is
-        # removed. Make both highlight brushes transparent while leaving the
-        # model's original BackgroundRole untouched.
+        clean.state = QStyle.StateFlag.State_Enabled
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            clean.state |= QStyle.StateFlag.State_MouseOver
+        # Rebuild the non-selected appearance explicitly. Windows/Fusion can
+        # keep painting a blue selection even after State_Selected is removed.
+        original_background = index.data(Qt.ItemDataRole.BackgroundRole)
+        if original_background:
+            painter.fillRect(option.rect, original_background)
+        else:
+            painter.fillRect(option.rect, clean.palette.brush(QPalette.ColorRole.Base))
         clean.palette.setBrush(
             QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0))
         )
@@ -152,30 +157,32 @@ class SheetViewPane(QFrame):
 
         tools = QHBoxLayout()
         self.tools_layout = tools
-        clear = QPushButton("清空选择")
-        clear.clicked.connect(self.clear_selection)
-        tools.addWidget(clear)
-        nonempty = QPushButton("选中所有非空单元格")
-        nonempty.clicked.connect(lambda: self.select_trait("nonempty", True))
-        tools.addWidget(nonempty)
+        select_button = QToolButton()
+        select_button.setText("选择 ▾")
+        select_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        select_menu = QMenu(select_button)
+        select_button.setMenu(select_menu)
+        nonempty = select_menu.addAction("全部非空单元格")
+        nonempty.triggered.connect(lambda: self.select_trait("nonempty", True))
+        select_menu.addSeparator()
         tools.addStretch(1)
-        filter_button = QToolButton()
-        filter_button.setText("条件筛选 ▾")
-        filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        filter_menu = QMenu(filter_button)
-        filter_button.setMenu(filter_menu)
         self.trait_buttons: dict[str, QAction] = {}
         for text, trait in (
             ("公式", "formula"), ("数值（非公式）", "number"),
             ("文字", "text"), ("带底色", "fill"),
         ):
-            action = filter_menu.addAction(text)
+            action = select_menu.addAction(text)
             action.setCheckable(True)
             action.toggled.connect(
                 lambda checked, kind=trait: self.select_trait(kind, checked)
             )
             self.trait_buttons[trait] = action
-        tools.addWidget(filter_button)
+        tools.insertWidget(0, select_button)
+        clear = QPushButton("清空")
+        clear.setObjectName("compactButton")
+        clear.setToolTip("取消当前工作表中的全部红框选择")
+        clear.clicked.connect(self.clear_selection)
+        tools.addWidget(clear)
         root.addLayout(tools)
 
         self.zoom_widget = QWidget()
