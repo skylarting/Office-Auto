@@ -66,7 +66,7 @@ assert "tkinter" in sys.modules
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_smart_sheet_list_chooses_best_target_and_cells(self):
+    def test_sheet_list_chooses_best_target_without_selecting_cells(self):
         with TemporaryDirectory() as folder:
             root = Path(folder)
             source = root / "来源.xlsx"; target = root / "目标.xlsx"
@@ -75,15 +75,13 @@ assert "tkinter" in sys.modules
             rows = suggest_studio_mappings([source], [target])
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].target_sheet, "GFX010_报表")
-            self.assertGreater(len(rows[0].source_cells), 0)
-            self.assertEqual(len(rows[0].source_cells), len(rows[0].target_cells))
-            self.assertEqual(len(rows[0].source_cells), len(set(rows[0].source_cells)))
-            self.assertEqual(len(rows[0].target_cells), len(set(rows[0].target_cells)))
+            self.assertEqual(rows[0].source_cells, [])
+            self.assertEqual(rows[0].target_cells, [])
 
     def test_manual_selection_is_the_only_saved_rule(self):
         row = WorksheetMapping(
             "source.xlsx", "数据", "target.xlsx", "报表",
-            ["A2", "A1"], ["B1", "B2"], ["C1"], ["C1"],
+            ["A2", "A1"], ["B1", "B2"],
         )
         rules = mapping_rules_from_rows([row])
         self.assertEqual(rules[0].source_cells, ["A2", "A1"])
