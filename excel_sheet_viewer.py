@@ -8,11 +8,11 @@ from PySide6.QtCore import (
     QAbstractTableModel, QItemSelectionModel, QModelIndex, QSignalBlocker,
     Qt, Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QPainter, QPalette, QPen
+from PySide6.QtGui import QAction, QBrush, QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
     QSlider, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
-    QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from excel_mapper import WorkbookReader, format_cell_addresses
@@ -143,29 +143,34 @@ class SheetViewPane(QFrame):
 
         tools = QHBoxLayout()
         self.tools_layout = tools
-        clear = QPushButton("取消全部")
+        clear = QPushButton("清空选择")
         clear.clicked.connect(self.clear_selection)
         tools.addWidget(clear)
-        nonempty = QPushButton("选择有值单元格")
+        nonempty = QPushButton("选择有值")
         nonempty.clicked.connect(lambda: self.select_trait("nonempty", True))
         tools.addWidget(nonempty)
         tools.addStretch(1)
-        self.trait_buttons: dict[str, QPushButton] = {}
+        filter_button = QToolButton()
+        filter_button.setText("条件筛选 ▾")
+        filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        filter_menu = QMenu(filter_button)
+        filter_button.setMenu(filter_menu)
+        self.trait_buttons: dict[str, QAction] = {}
         for text, trait in (
             ("公式", "formula"), ("数值（非公式）", "number"),
             ("文字", "text"), ("带底色", "fill"),
         ):
-            button = QPushButton(text)
-            button.setCheckable(True)
-            button.toggled.connect(
+            action = filter_menu.addAction(text)
+            action.setCheckable(True)
+            action.toggled.connect(
                 lambda checked, kind=trait: self.select_trait(kind, checked)
             )
-            tools.addWidget(button)
-            self.trait_buttons[trait] = button
+            self.trait_buttons[trait] = action
+        tools.addWidget(filter_button)
         root.addLayout(tools)
 
         zoom_line = QHBoxLayout()
-        fit = QPushButton("适合窗口")
+        fit = QPushButton("适应宽度")
         fit.clicked.connect(self.fit_window)
         zoom_line.addWidget(fit)
         zoom_line.addWidget(QLabel("缩放"))

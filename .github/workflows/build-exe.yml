@@ -16,7 +16,6 @@ on:
       - "test_excel_mapping_qt.py"
       - "test_excel_mapping_smart.py"
       - "test_excel_mapping_studio.py"
-      - "test_smart_template_unique.py"
       - ".github/workflows/build-exe.yml"
 
 jobs:
