@@ -89,6 +89,18 @@ class ExportSummaryTests(unittest.TestCase):
             self.assertEqual(sheet["D5"].border.bottom.style, "thin")
             workbook.close()
 
+    def test_create_combined_summary_can_filter_sheet_names(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir); source = folder / "甲.xlsx"; output = folder / "筛选汇总.xlsx"
+            make_source(source, 100)
+            export_summary.create_new_summary_workbook(
+                [source], ["I8"], output, "汇总", included_sheets={"数据1"}
+            )
+            workbook = load_workbook(output, data_only=False); sheet = workbook["汇总"]
+            self.assertEqual(sheet.max_row, 2)
+            self.assertEqual(sheet["A2"].value, "数据1")
+            workbook.close()
+
     def test_create_copy_with_summary_as_first_sheet(self) -> None:
         with TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "源.xlsx"

@@ -75,6 +75,20 @@ class SmartWizardTests(unittest.TestCase):
             self.assertNotIn("C5", pane.selected_addresses())
             pane.close()
 
+    def test_trait_menu_state_follows_actual_cell_selection(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "viewer.xlsx"
+            make_book(path, "数据")
+            pane = SheetViewPane("来源数据"); pane.load_sheet(path, "数据")
+            self.assertEqual(pane.trait_state("number"), "none")
+            pane.select_addresses(["B4"], clear=True)
+            self.assertEqual(pane.trait_state("number"), "partial")
+            pane.toggle_trait("number")
+            self.assertEqual(pane.trait_state("number"), "all")
+            pane.toggle_trait("number")
+            self.assertEqual(pane.trait_state("number"), "none")
+            pane.close()
+
     def test_review_group_includes_auto_and_pending_items_for_same_sheet(self):
         window = SmartMappingWindow()
         from smart_template import SmartMatch, SmartTemplatePlan

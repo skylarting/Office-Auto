@@ -174,25 +174,31 @@ class SheetViewPane(QFrame):
         tools = QHBoxLayout()
         self.tools_layout = tools
         select_button = QToolButton()
-        select_button.setText("选择 ▾")
+        select_button.setText("条件筛选 ▾")
         select_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         select_menu = QMenu(select_button)
         select_button.setMenu(select_menu)
-        nonempty = select_menu.addAction("全部非空单元格")
-        nonempty.triggered.connect(lambda: self.select_trait("nonempty", True))
+        self.select_menu = select_menu
+        self.trait_labels = {
+            "nonempty": "所有包含内容的单元格",
+            "formula": "公式",
+            "number": "数值（非公式）",
+            "text": "文字",
+            "fill": "带底色",
+        }
+        nonempty = select_menu.addAction(self.trait_labels["nonempty"])
+        nonempty.triggered.connect(lambda: self.toggle_trait("nonempty"))
         select_menu.addSeparator()
         tools.addStretch(1)
-        self.trait_buttons: dict[str, QAction] = {}
+        self.trait_actions: dict[str, QAction] = {"nonempty": nonempty}
         for text, trait in (
             ("公式", "formula"), ("数值（非公式）", "number"),
             ("文字", "text"), ("带底色", "fill"),
         ):
             action = select_menu.addAction(text)
-            action.setCheckable(True)
-            action.toggled.connect(
-                lambda checked, kind=trait: self.select_trait(kind, checked)
-            )
-            self.trait_buttons[trait] = action
+            action.triggered.connect(lambda _checked=False, kind=trait: self.toggle_trait(kind))
+            self.trait_actions[trait] = action
+        select_menu.aboutToShow.connect(self.refresh_trait_states)
         tools.insertWidget(0, select_button)
         clear = QPushButton("清空")
         clear.setObjectName("compactButton")
@@ -247,7 +253,20 @@ class SheetViewPane(QFrame):
         self.table.selectionModel().selectionChanged.connect(
             lambda *_: self.selection_changed.emit(self.selected_addresses())
         )
+        self.table.selectionModel().selectionChanged.connect(
+            lambda *_: self.refresh_trait_states()
+        )
         self.set_zoom(self.zoom_slider.value())
+
+    def clear_sheet(self) -> None:
+        """Remove the previous workbook view instead of leaving stale content visible."""
+        if self.model:
+            self.model.close()
+            self.model = None
+        self.table.setModel(None)
+        self.heading.setText(self.title_text)
+        self._manual_order.clear()
+        self.refresh_trait_states()
 
     def add_toolbar_button(self, text: str, callback) -> QPushButton:
         button = QPushButton(text)
@@ -293,9 +312,43 @@ class SheetViewPane(QFrame):
     def clear_selection(self) -> None:
         self.table.clearSelection()
         self._manual_order.clear()
-        for button in self.trait_buttons.values():
-            with QSignalBlocker(button):
-                button.setChecked(False)
+        self.refresh_trait_states()
+
+    def trait_state(self, trait: str) -> str:
+        """Return none/partial/all based only on the actual red-box selection."""
+        if not self.model or not self.table.selectionModel():
+            return "none"
+        matching = {
+            (row, column)
+            for row in range(self.model.rows)
+            for column in range(self.model.columns)
+            if trait in self.model.traits_at(row, column)
+        }
+        if not matching:
+            return "none"
+        selected = {
+            (index.row(), index.column())
+            for index in self.table.selectionModel().selectedIndexes()
+        }
+        count = len(matching & selected)
+        if count == 0:
+            return "none"
+        return "all" if count == len(matching) else "partial"
+
+    def refresh_trait_states(self) -> None:
+        symbols = {"none": "☐", "partial": "—", "all": "✓"}
+        for trait, action in self.trait_actions.items():
+            state = self.trait_state(trait)
+            action.setText(f"{symbols[state]}  {self.trait_labels[trait]}")
+            action.setToolTip(
+                "再次点击将取消此类全部单元格"
+                if state == "all"
+                else "点击后选中此类全部单元格"
+            )
+
+    def toggle_trait(self, trait: str) -> None:
+        self.select_trait(trait, self.trait_state(trait) != "all")
+        self.refresh_trait_states()
 
     def select_trait(self, trait: str, select: bool) -> None:
         if not self.model or not self.table.selectionModel():
@@ -427,6 +480,10 @@ class DualSheetViewer(QWidget):
     ) -> None:
         self.source.load_sheet(source_path, source_sheet)
         self.target.load_sheet(target_path, target_sheet)
+
+    def clear_pair(self) -> None:
+        self.source.clear_sheet()
+        self.target.clear_sheet()
 
     def _sync_scroll(self, pane: SheetViewPane, value: int, vertical: bool) -> None:
         if not self.link_scroll.isChecked() or self._syncing:

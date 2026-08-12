@@ -871,12 +871,14 @@ class StudioWindow(QMainWindow):
         self.resize(1480, 920)
         self.setMinimumSize(1050, 720)
         self.default_folder: Path | None = None
+        self.default_target_file: Path | None = None
         self.output_folder: Path | None = None
         self.known_files: list[Path] = []
         self.mappings: list[WorksheetMapping] = []
         self.current_row = -1
         self.loading_viewer = False
         self.same_position_default = True
+        self.summary_window = None
 
         central = QWidget(); self.setCentralWidget(central)
         root = QVBoxLayout(central); root.setContentsMargins(18, 14, 18, 14); root.setSpacing(10)
@@ -890,6 +892,12 @@ class StudioWindow(QMainWindow):
         self.folder_edit.setMinimumWidth(360)
         self.folder_edit.mousePressEvent = lambda _event: self.choose_default_folder()
         heading_line.addWidget(self.folder_edit, 1)
+        heading_line.addWidget(QLabel("默认目标工作簿："))
+        self.target_edit = QLineEdit(); self.target_edit.setReadOnly(True)
+        self.target_edit.setPlaceholderText("点击选择（可选）")
+        self.target_edit.setMinimumWidth(260)
+        self.target_edit.mousePressEvent = lambda _event: self.choose_default_target()
+        heading_line.addWidget(self.target_edit, 1)
         root.addLayout(heading_line)
         self.build_menu_bar()
 
@@ -902,17 +910,16 @@ class StudioWindow(QMainWindow):
         clear = QPushButton("清空列表"); clear.clicked.connect(self.clear_mappings); map_header.addWidget(clear)
         upper_layout.addLayout(map_header)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
-            ["使用", "来源工作簿", "来源工作表", "→", "目标工作簿", "目标工作表", "单元格状态"]
+            ["来源工作表", "→", "目标工作表", "单元格状态"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(0, 54); self.table.setColumnWidth(1, 250)
-        self.table.setColumnWidth(2, 145); self.table.setColumnWidth(3, 34)
-        self.table.setColumnWidth(4, 250); self.table.setColumnWidth(5, 175)
+        self.table.setColumnWidth(0, 440); self.table.setColumnWidth(1, 38)
+        self.table.setColumnWidth(2, 440)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setMinimumHeight(72)
         self.table.cellClicked.connect(self.mapping_cell_clicked)
@@ -927,7 +934,7 @@ class StudioWindow(QMainWindow):
         lower_layout.setContentsMargins(0, 0, 0, 0); lower_layout.setSpacing(6)
         current_line = QHBoxLayout()
         self.current_label = QLabel("请在上方选择一组完整的工作表对应关系")
-        self.current_label.setObjectName("sectionTitle")
+        self.current_label.setObjectName("currentRelation")
         current_line.addWidget(self.current_label); current_line.addStretch(1)
         previous = QPushButton("上一组"); previous.clicked.connect(lambda: self.move_current(-1)); current_line.addWidget(previous)
         following = QPushButton("下一组"); following.clicked.connect(lambda: self.move_current(1)); current_line.addWidget(following)
@@ -992,7 +999,8 @@ class StudioWindow(QMainWindow):
         mapping_action = function_menu.addAction("工作表数据映射")
         mapping_action.setCheckable(True); mapping_action.setChecked(True)
         summary_action = function_menu.addAction("工作表数据汇总（待接入）")
-        summary_action.setEnabled(False)
+        summary_action.setText("工作表数据汇总…")
+        summary_action.triggered.connect(self.open_summary_window)
 
         edit_menu = self.menuBar().addMenu("编辑")
         copy_action = edit_menu.addAction("复制选中关系")
@@ -1012,9 +1020,6 @@ class StudioWindow(QMainWindow):
         self.sync_zoom_action.toggled.connect(self.viewer_link_zoom_changed)
         fit_action = view_menu.addAction("适应窗口")
         fit_action.triggered.connect(lambda: self.viewer.fit_both() if hasattr(self, "viewer") else None)
-        view_menu.addSeparator()
-        collapse_action = view_menu.addAction("工作表对应列表只显示一行")
-        collapse_action.triggered.connect(self.collapse_mapping_list)
 
         settings_menu = self.menuBar().addMenu("设置")
         self.same_position_action = settings_menu.addAction("目标默认使用来源单元格位置")
@@ -1031,15 +1036,18 @@ class StudioWindow(QMainWindow):
             self.save_current_selection()
             self.refresh_selection_summary()
 
+    def open_summary_window(self) -> None:
+        from excel_summary_qt import ExcelSummaryWindow
+        if self.summary_window is None:
+            self.summary_window = ExcelSummaryWindow()
+            self.summary_window.setStyleSheet(self.styleSheet())
+        self.summary_window.show(); self.summary_window.raise_(); self.summary_window.activateWindow()
+
     def viewer_link_scroll_changed(self, checked: bool) -> None:
         if hasattr(self, "viewer"): self.viewer.link_scroll.setChecked(checked)
 
     def viewer_link_zoom_changed(self, checked: bool) -> None:
         if hasattr(self, "viewer"): self.viewer.link_zoom.setChecked(checked)
-
-    def collapse_mapping_list(self) -> None:
-        if hasattr(self, "workspace_splitter"):
-            self.workspace_splitter.setSizes([82, max(self.height() - 200, 500)])
 
     def change_zoom(self, delta: int) -> None:
         self.set_zoom(self.viewer.source.zoom_slider.value() + delta)
@@ -1073,6 +1081,18 @@ class StudioWindow(QMainWindow):
         self.known_files = workbook_files_in_folder(self.default_folder)
         if not self.output_folder:
             self.output_edit.setPlaceholderText(str(self.default_folder / "映射结果"))
+
+    def choose_default_target(self) -> None:
+        value, _ = QFileDialog.getOpenFileName(
+            self, "选择默认目标工作簿", str(self.default_folder or Path.home()), WORKBOOK_FILTER
+        )
+        if not value:
+            return
+        self.default_target_file = Path(value).resolve()
+        self.target_edit.setText(self.default_target_file.name)
+        self.target_edit.setToolTip(str(self.default_target_file))
+        if self.default_target_file not in self.known_files:
+            self.known_files.append(self.default_target_file)
 
     def import_mapping_workbook(self) -> None:
         value, _ = QFileDialog.getOpenFileName(
@@ -1137,19 +1157,22 @@ class StudioWindow(QMainWindow):
         for row, mapping in enumerate(self.mappings):
             blank = self.mapping_is_blank(mapping)
             texts = (
-                "默认新增" if blank else ("使用" if mapping.enabled else "忽略"),
-                Path(mapping.source_file).name if mapping.source_file else "点击选择",
-                mapping.source_sheet or "点击选择",
+                (
+                    f"{Path(mapping.source_file).name} / {mapping.source_sheet}"
+                    if mapping.source_file and mapping.source_sheet else "点击选择来源工作表"
+                ),
                 "→",
-                Path(mapping.target_file).name if mapping.target_file else "点击选择",
-                mapping.target_sheet or "点击选择",
+                (
+                    f"{Path(mapping.target_file).name} / {mapping.target_sheet}"
+                    if mapping.target_file and mapping.target_sheet else "点击选择目标工作表"
+                ),
                 mapping.status,
             )
             for column, value in enumerate(texts):
                 item = QTableWidgetItem(value)
-                if column in (0, 3): item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if column == 1: item.setToolTip(mapping.source_file)
-                if column == 4: item.setToolTip(mapping.target_file)
+                if column == 1: item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if column == 0: item.setToolTip(mapping.source_file)
+                if column == 2: item.setToolTip(mapping.target_file)
                 self.table.setItem(row, column, item)
         self.table.blockSignals(False)
 
@@ -1174,7 +1197,7 @@ class StudioWindow(QMainWindow):
             return
         self.mappings.clear(); self.current_row = -1; self.refresh_table()
         self.ensure_blank_draft(); self.refresh_table()
-        self.viewer.setEnabled(False); self.current_label.setText("请添加或选择一组工作表对应关系")
+        self.clear_viewer_state("请添加或选择一组工作表对应关系")
 
     def remove_selected(self) -> None:
         rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
@@ -1184,7 +1207,7 @@ class StudioWindow(QMainWindow):
         self.current_row = -1; self.refresh_table()
         self.ensure_blank_draft(); self.refresh_table()
         if self.mappings and not self.mapping_is_blank(self.mappings[0]): self.load_mapping(min(rows[-1], len(self.mappings) - 1))
-        else: self.viewer.setEnabled(False)
+        else: self.clear_viewer_state()
 
     def selected_rows(self) -> list[int]:
         return sorted({index.row() for index in self.table.selectedIndexes()})
@@ -1280,91 +1303,75 @@ class StudioWindow(QMainWindow):
         self.mapping_context_menu(viewport_position)
 
     def mapping_cell_clicked(self, row: int, column: int) -> None:
-        if column in (1, 4):
-            self.choose_workbook(row, column == 1)
-        elif column in (2, 5):
-            self.choose_sheet(row, column == 2)
-        elif column == 0:
-            if self.mapping_is_blank(self.mappings[row]):
-                self.choose_workbook(row, True)
-            else:
-                self.mappings[row].enabled = not self.mappings[row].enabled; self.refresh_table()
+        if column in (0, 2):
+            self.choose_workbook_sheet(row, column == 0)
         else:
             self.load_mapping(row)
 
-    def choose_workbook(self, row: int, source: bool) -> None:
+    def choose_workbook_sheet(self, row: int, source: bool) -> None:
+        """Choose workbook and worksheet in one hierarchical menu."""
         menu = QMenu(self)
         paths = self.all_files()
+        if not source and self.default_target_file in paths:
+            paths.remove(self.default_target_file)
+            paths.insert(0, self.default_target_file)
         if self.default_folder:
             default_paths = [path for path in paths if path.parent == self.default_folder.resolve()]
             if default_paths:
                 heading = menu.addAction("默认文件夹"); heading.setEnabled(False)
                 for path in default_paths:
-                    action = menu.addAction(f"    {path.name}"); action.setData(str(path)); action.setToolTip(str(path))
+                    book_menu = menu.addMenu(f"    {path.name}")
+                    book_menu.setToolTipsVisible(True); book_menu.setToolTip(str(path))
+                    for sheet in workbook_sheet_names(path):
+                        action = book_menu.addAction(sheet); action.setData((str(path), sheet))
                 menu.addSeparator()
         outside = [path for path in paths if not self.default_folder or path.parent != self.default_folder.resolve()]
         if outside:
-            heading = menu.addAction("其他位置"); heading.setEnabled(False)
+            heading = menu.addAction("本次方案使用的其他文件"); heading.setEnabled(False)
             for path in outside:
-                action = menu.addAction(f"    {path.name}"); action.setData(str(path)); action.setToolTip(str(path))
+                book_menu = menu.addMenu(f"    {path.name}")
+                for sheet in workbook_sheet_names(path):
+                    action = book_menu.addAction(sheet); action.setData((str(path), sheet))
             menu.addSeparator()
-        browse = menu.addAction("选择其他文件夹中的表格…")
+        browse = menu.addAction("选择其他文件夹中的工作表…")
         clear = menu.addAction("清空选择")
-        chosen = menu.exec(self.table.viewport().mapToGlobal(self.table.visualItemRect(self.table.item(row, 1 if source else 4)).bottomLeft()))
+        column = 0 if source else 2
+        chosen = menu.exec(self.table.viewport().mapToGlobal(self.table.visualItemRect(self.table.item(row, column)).bottomLeft()))
         if not chosen: return
         if chosen == browse:
             value, _ = QFileDialog.getOpenFileName(self, "选择 Excel 工作簿", str(self.default_folder or Path.home()), WORKBOOK_FILTER)
             if not value: return
             path = Path(value).resolve(); self.known_files.append(path)
+            sheets = workbook_sheet_names(path)
+            sheet, accepted = QInputDialog.getItem(self, "选择工作表", path.name, sheets, 0, False)
+            if not accepted or not sheet: return
         elif chosen == clear:
-            path = None
+            path, sheet = None, ""
         else:
-            path = Path(str(chosen.data()))
+            data = chosen.data()
+            if not isinstance(data, tuple): return
+            path, sheet = Path(data[0]), str(data[1])
         self.save_current_selection()
         mapping = self.mappings[row]
         if source:
-            mapping.source_file = str(path or ""); mapping.source_sheet = ""
+            mapping.source_file = str(path or ""); mapping.source_sheet = sheet
         else:
-            mapping.target_file = str(path or ""); mapping.target_sheet = ""
+            mapping.target_file = str(path or ""); mapping.target_sheet = sheet
         mapping.source_cells = []; mapping.target_cells = []
-        if path:
-            sheets = workbook_sheet_names(path)
-            if sheets:
-                if source:
-                    mapping.source_sheet = sheets[0]
-                else:
-                    mapping.target_sheet = preferred_target_sheet(mapping.source_sheet, sheets) or sheets[0]
-        if source and mapping.source_sheet and mapping.target_file:
-            target_sheets = workbook_sheet_names(Path(mapping.target_file))
-            mapping.target_sheet = preferred_target_sheet(mapping.source_sheet, target_sheets) or mapping.target_sheet
+        if source and mapping.source_sheet and self.default_target_file:
+            target_sheets = workbook_sheet_names(self.default_target_file)
+            suggested = preferred_target_sheet(mapping.source_sheet, target_sheets)
+            if suggested:
+                mapping.target_file = str(self.default_target_file); mapping.target_sheet = suggested
         self.refresh_table(); self.load_mapping(row)
         self.ensure_blank_draft(); self.refresh_table()
 
+    # Kept as compatibility shims for older tests/extensions.
+    def choose_workbook(self, row: int, source: bool) -> None:
+        self.choose_workbook_sheet(row, source)
+
     def choose_sheet(self, row: int, source: bool) -> None:
-        mapping = self.mappings[row]
-        path_text = mapping.source_file if source else mapping.target_file
-        if not path_text:
-            self.choose_workbook(row, source); return
-        sheets = workbook_sheet_names(Path(path_text))
-        menu = QMenu(self); placeholder = menu.addAction("请选择工作表"); placeholder.setEnabled(False)
-        for name in sheets:
-            action = menu.addAction(name); action.setData(name)
-        menu.addSeparator(); clear = menu.addAction("清空选择")
-        column = 2 if source else 5
-        chosen = menu.exec(self.table.viewport().mapToGlobal(self.table.visualItemRect(self.table.item(row, column)).bottomLeft()))
-        if not chosen: return
-        self.save_current_selection()
-        value = "" if chosen == clear else str(chosen.data())
-        if source:
-            mapping.source_sheet = value
-            if value and mapping.target_file:
-                target_sheets = workbook_sheet_names(Path(mapping.target_file))
-                mapping.target_sheet = preferred_target_sheet(value, target_sheets) or mapping.target_sheet
-        else:
-            mapping.target_sheet = value
-        mapping.source_cells = []; mapping.target_cells = []
-        self.refresh_table(); self.load_mapping(row)
-        self.ensure_blank_draft(); self.refresh_table()
+        self.choose_workbook_sheet(row, source)
 
     def load_mapping(self, row: int) -> None:
         if row < 0 or row >= len(self.mappings): return
@@ -1372,8 +1379,7 @@ class StudioWindow(QMainWindow):
         mapping = self.mappings[row]
         self.current_row = row; self.table.selectRow(row)
         if not all((mapping.source_file, mapping.source_sheet, mapping.target_file, mapping.target_sheet)):
-            self.viewer.setEnabled(False)
-            self.current_label.setText(f"第 {row + 1} / {len(self.mappings)} 组   请先选择完整的工作簿和工作表")
+            self.clear_viewer_state(f"第 {row + 1} / {len(self.mappings)} 组   请先选择完整的工作簿和工作表")
             return
         try:
             self.loading_viewer = True; self.viewer.setEnabled(True)
@@ -1387,7 +1393,7 @@ class StudioWindow(QMainWindow):
             )
             self.refresh_selection_summary()
         except Exception as exc:
-            self.viewer.setEnabled(False); QMessageBox.warning(self, "无法读取工作表", str(exc))
+            self.clear_viewer_state(); QMessageBox.warning(self, "无法读取工作表", str(exc))
         finally:
             self.loading_viewer = False
 
@@ -1405,7 +1411,15 @@ class StudioWindow(QMainWindow):
 
     def selection_changed(self) -> None:
         if self.loading_viewer: return
-        self.save_current_selection(); self.refresh_selection_summary(); self.refresh_table()
+        self.save_current_selection(); self.refresh_selection_summary(); self.refresh_current_status()
+
+    def refresh_current_status(self) -> None:
+        """Update only the changing status cell; rebuilding the table causes visible jumps."""
+        if self.current_row < 0 or self.current_row >= len(self.mappings):
+            return
+        item = self.table.item(self.current_row, 3)
+        if item:
+            item.setText(self.mappings[self.current_row].status)
 
     def source_selection_changed(self) -> None:
         if self.loading_viewer:
@@ -1437,6 +1451,16 @@ class StudioWindow(QMainWindow):
         self.viewer.source.select_addresses(self.viewer.target.selected_addresses())
         self.selection_changed()
 
+    def clear_viewer_state(self, message: str = "尚未选择工作表对应关系") -> None:
+        self.loading_viewer = True
+        try:
+            self.viewer.clear_pair(); self.viewer.setEnabled(False)
+            self.source_summary.setText("来源（0）：尚未选择")
+            self.target_summary.setText("目标（0）：尚未选择")
+            self.current_label.setText(message)
+        finally:
+            self.loading_viewer = False
+
     def move_current(self, delta: int) -> None:
         if not self.mappings: return
         self.load_mapping(max(0, min(len(self.mappings) - 1, self.current_row + delta)))
@@ -1467,6 +1491,8 @@ class StudioWindow(QMainWindow):
             outputs = execute_mapping_plan(source_files, target_files, rules, output, progress)
             self.status_label.setText("已完成")
             QMessageBox.information(self, "生成完成", "已生成报表副本：\n" + "\n".join(map(str, outputs)))
+            self.table.clearSelection(); self.current_row = -1
+            self.clear_viewer_state("映射已完成；请选择工作表对应关系继续查看或修改")
         except Exception as exc:
             self.status_label.setText("生成失败"); QMessageBox.critical(self, "生成失败", str(exc))
         finally:
@@ -1480,7 +1506,8 @@ def application_style() -> str:
     return """
     QMainWindow, QWidget { background: #F5F7FA; color: #1F2937; font-family: "Microsoft YaHei UI"; font-size: 14px; }
     QLabel#pageTitle { font-size: 26px; font-weight: 600; color: #172B4D; }
-    QLabel#pageSubtitle, QLabel#secondaryText { color: #667085; }
+    QLabel#pageSubtitle, QLabel#secondaryText, QLabel#currentRelation { color: #667085; }
+    QLabel#currentRelation { font-size: 14px; font-weight: 400; }
     QLabel#sectionTitle, QLabel#dialogTitle, QLabel#sheetPaneTitle { font-size: 17px; font-weight: 600; color: #172B4D; }
     QFrame#filePanel, QFrame#summaryPanel, QFrame#sheetPane { background: white; border: 1px solid #DDE3EC; border-radius: 9px; }
     QLineEdit, QComboBox, QListWidget, QTableWidget, QTableView { background: white; border: 1px solid #CBD5E1; border-radius: 5px; selection-background-color: #DCEAFF; selection-color: #172B4D; }

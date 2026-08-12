@@ -43,7 +43,32 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(hasattr(window, "folder_edit"))
         self.assertTrue(hasattr(window, "table"))
         self.assertTrue(hasattr(window, "viewer"))
+        self.assertEqual(window.table.columnCount(), 4)
+        self.assertEqual(window.table.horizontalHeaderItem(0).text(), "来源工作表")
+        self.assertEqual(window.table.horizontalHeaderItem(2).text(), "目标工作表")
         window.close()
+
+    def test_incomplete_mapping_clears_previous_viewer_models(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder); source = root / "来源.xlsx"; target = root / "目标.xlsx"
+            make_book(source, "来源表"); make_book(target, "目标表")
+            window = StudioWindow()
+            window.mappings = [
+                WorksheetMapping(str(source), "来源表", str(target), "目标表"),
+                WorksheetMapping("", "", "", ""),
+            ]
+            window.refresh_table(); window.load_mapping(0)
+            self.assertIsNotNone(window.viewer.source.model)
+            window.load_mapping(1)
+            self.assertIsNone(window.viewer.source.model)
+            self.assertIsNone(window.viewer.target.model)
+            window.close()
+
+    def test_summary_feature_opens_qt_window(self):
+        window = StudioWindow(); window.open_summary_window()
+        self.assertIsNotNone(window.summary_window)
+        self.assertIn("单元格汇总", window.summary_window.windowTitle())
+        window.summary_window.close(); window.close()
 
     def test_context_menu_selects_the_whole_clicked_row(self):
         window = StudioWindow()

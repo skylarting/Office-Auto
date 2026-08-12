@@ -166,6 +166,7 @@ def read_xls_records(
     source_path: Path,
     addresses: list[str],
     summary_name: str,
+    included_sheets: set[str] | None = None,
 ) -> list[SummaryRecord]:
     book = xlrd.open_workbook(
         source_path,
@@ -176,6 +177,8 @@ def read_xls_records(
     try:
         for sheet in book.sheets():
             if sheet.name == summary_name:
+                continue
+            if included_sheets is not None and sheet.name not in included_sheets:
                 continue
             values: list[object] = []
             number_formats: list[str] = []
@@ -205,9 +208,10 @@ def read_records(
     source_path: Path,
     addresses: list[str],
     summary_name: str,
+    included_sheets: set[str] | None = None,
 ) -> list[SummaryRecord]:
     if source_path.suffix.lower() == ".xls":
-        return read_xls_records(source_path, addresses, summary_name)
+        return read_xls_records(source_path, addresses, summary_name, included_sheets)
 
     keep_vba = source_path.suffix.lower() == ".xlsm"
     value_book = load_workbook(
@@ -225,6 +229,8 @@ def read_records(
     try:
         for sheet_name in value_book.sheetnames:
             if sheet_name == summary_name:
+                continue
+            if included_sheets is not None and sheet_name not in included_sheets:
                 continue
             value_sheet = value_book[sheet_name]
             format_sheet = format_book[sheet_name]
@@ -316,6 +322,7 @@ def create_new_summary_workbook(
     output_path: Path,
     summary_name: str,
     progress: Callable[[int, int, str], None] | None = None,
+    included_sheets: set[str] | None = None,
 ) -> None:
     all_records: list[SummaryRecord] = []
     total = len(source_files)
@@ -323,7 +330,7 @@ def create_new_summary_workbook(
     for index, source_path in enumerate(source_files, start=1):
         if progress:
             progress(index - 1, total, f"正在读取：{source_path.name}")
-        all_records.extend(read_records(source_path, addresses, summary_name))
+        all_records.extend(read_records(source_path, addresses, summary_name, included_sheets))
 
     output_book = Workbook()
     output_sheet = output_book.active
