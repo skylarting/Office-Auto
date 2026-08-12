@@ -36,9 +36,11 @@ class StudioTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_window_starts_on_file_selection(self):
+    def test_window_starts_on_single_workspace(self):
         window = StudioWindow()
-        self.assertIs(window.stack.currentWidget(), window.files_page)
+        self.assertTrue(hasattr(window, "folder_edit"))
+        self.assertTrue(hasattr(window, "table"))
+        self.assertTrue(hasattr(window, "viewer"))
         window.close()
 
     def test_module_imports_when_tkinter_is_unavailable(self):

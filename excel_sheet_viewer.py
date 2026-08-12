@@ -106,6 +106,7 @@ class RedOutlineDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         clean = QStyleOptionViewItem(option)
         clean.state &= ~QStyle.StateFlag.State_Selected
+        clean.state &= ~QStyle.StateFlag.State_HasFocus
         # Some platform styles still use Highlight after State_Selected is
         # removed. Make both highlight brushes transparent while leaving the
         # model's original BackgroundRole untouched.
@@ -146,7 +147,7 @@ class SheetViewPane(QFrame):
         clear = QPushButton("清空选择")
         clear.clicked.connect(self.clear_selection)
         tools.addWidget(clear)
-        nonempty = QPushButton("选择有值")
+        nonempty = QPushButton("选中所有非空单元格")
         nonempty.clicked.connect(lambda: self.select_trait("nonempty", True))
         tools.addWidget(nonempty)
         tools.addStretch(1)
@@ -169,7 +170,9 @@ class SheetViewPane(QFrame):
         tools.addWidget(filter_button)
         root.addLayout(tools)
 
-        zoom_line = QHBoxLayout()
+        self.zoom_widget = QWidget()
+        zoom_line = QHBoxLayout(self.zoom_widget)
+        zoom_line.setContentsMargins(0, 0, 0, 0)
         fit = QPushButton("适应宽度")
         fit.clicked.connect(self.fit_window)
         zoom_line.addWidget(fit)
@@ -181,10 +184,19 @@ class SheetViewPane(QFrame):
         zoom_line.addWidget(self.zoom_slider, 1)
         self.zoom_label = QLabel("100%")
         zoom_line.addWidget(self.zoom_label)
-        root.addLayout(zoom_line)
+        root.addWidget(self.zoom_widget)
 
         self.table = QTableView()
         self.table.setItemDelegate(RedOutlineDelegate(self.table))
+        # The delegate draws the only selection indicator. Prevent the native
+        # style sheet/palette from adding a blue selection fill underneath it.
+        palette = self.table.palette()
+        palette.setBrush(QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0)))
+        palette.setBrush(QPalette.ColorRole.HighlightedText, palette.brush(QPalette.ColorRole.Text))
+        self.table.setPalette(palette)
+        self.table.setStyleSheet(
+            "QTableView::item:selected { background: transparent; color: palette(text); }"
+        )
         # MultiSelection makes an ordinary click toggle one cell, matching the
         # behavior business users expect from the earlier mapping picker.
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
@@ -200,7 +212,7 @@ class SheetViewPane(QFrame):
             self.model.close()
         self.model = WorksheetModel(path, sheet_name, self)
         self.table.setModel(self.model)
-        self.heading.setText(f"{self.title_text}\n{path.name} / {sheet_name}")
+        self.heading.setText(self.title_text)
         self.table.selectionModel().selectionChanged.connect(
             lambda *_: self.selection_changed.emit(self.selected_addresses())
         )
@@ -303,13 +315,29 @@ class DualSheetViewer(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         top = QHBoxLayout()
         self.link_scroll = QCheckBox("同步滚动")
-        self.link_scroll.setChecked(False)
+        self.link_scroll.setChecked(True)
         top.addWidget(self.link_scroll)
+        self.link_zoom = QCheckBox("同步缩放")
+        self.link_zoom.setChecked(True)
+        top.addWidget(self.link_zoom)
+        fit = QPushButton("适应窗口")
+        fit.clicked.connect(self.fit_both)
+        top.addWidget(fit)
+        top.addWidget(QLabel("缩放"))
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(40, 180)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setMaximumWidth(240)
+        top.addWidget(self.zoom_slider)
+        self.zoom_label = QLabel("100%")
+        top.addWidget(self.zoom_label)
         top.addStretch(1)
         root.addLayout(top)
         panes = QHBoxLayout()
         self.source = SheetViewPane("来源数据")
         self.target = SheetViewPane("要填写的报表")
+        self.source.zoom_widget.hide()
+        self.target.zoom_widget.hide()
         panes.addWidget(self.source, 1)
         panes.addWidget(self.target, 1)
         root.addLayout(panes, 1)
@@ -326,6 +354,13 @@ class DualSheetViewer(QWidget):
         self.target.table.horizontalScrollBar().valueChanged.connect(
             lambda value: self._sync_scroll(self.source, value, False)
         )
+        self.source.zoom_slider.valueChanged.connect(
+            lambda value: self._sync_zoom(self.target, value)
+        )
+        self.target.zoom_slider.valueChanged.connect(
+            lambda value: self._sync_zoom(self.source, value)
+        )
+        self.zoom_slider.valueChanged.connect(self.set_zoom)
 
     def load_pair(
         self, source_path: Path, source_sheet: str,
@@ -343,6 +378,29 @@ class DualSheetViewer(QWidget):
             bar.setValue(value)
         finally:
             self._syncing = False
+
+    def _sync_zoom(self, pane: SheetViewPane, value: int) -> None:
+        if not self.link_zoom.isChecked() or self._syncing:
+            return
+        self._syncing = True
+        try:
+            pane.zoom_slider.setValue(value)
+        finally:
+            self._syncing = False
+
+    def fit_both(self) -> None:
+        self.source.fit_window()
+        if self.link_zoom.isChecked():
+            self.target.zoom_slider.setValue(self.source.zoom_slider.value())
+        else:
+            self.target.fit_window()
+        self.zoom_slider.setValue(self.source.zoom_slider.value())
+
+    def set_zoom(self, value: int) -> None:
+        self.zoom_label.setText(f"{value}%")
+        self.source.zoom_slider.setValue(value)
+        if self.link_zoom.isChecked():
+            self.target.zoom_slider.setValue(value)
 
     def close(self) -> None:
         self.source.close()
