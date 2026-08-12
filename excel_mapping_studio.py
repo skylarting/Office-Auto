@@ -15,13 +15,16 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+# The Qt build intentionally excludes Tk/Tcl. Import the Qt compatibility
+# bootstrap first so excel_mapper sees the lightweight tkinter placeholders.
+from excel_mapping_qt import bundled_asset, install_tkinter_build_stub
+
 from excel_mapper import (
     MODE_SEQUENCE, MappingRule, best_name_match, execute_mapping_plan,
     format_cell_addresses, infer_mapping_mode, spreadsheet_automation_provider,
     validate_mapping_plan, workbook_files_in_folder, workbook_sheet_names,
     xls_formula_risk,
 )
-from excel_mapping_qt import bundled_asset, install_tkinter_build_stub
 from excel_sheet_viewer import DualSheetViewer
 from smart_template import SheetPair, SmartMatch, match_pair, suggest_sheet_pairs
 
