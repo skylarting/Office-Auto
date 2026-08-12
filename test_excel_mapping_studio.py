@@ -11,8 +11,10 @@ from openpyxl import Workbook
 from PySide6.QtWidgets import QApplication
 
 from excel_mapping_studio import (
-    StudioWindow, WorksheetMapping, mapping_rules_from_rows,
-    preserve_existing_pair_order, suggest_studio_mappings,
+    CELL_PAIR_HEADERS, SHEET_PAIR_HEADERS, StudioWindow, WorksheetMapping,
+    load_studio_mapping_workbook, mapping_rules_from_rows,
+    preferred_target_sheet, preserve_existing_pair_order, suggest_studio_mappings,
+    save_studio_mapping_workbook, target_code_for_source_name,
     validate_studio_duplicate_targets,
 )
 
@@ -41,6 +43,16 @@ class StudioTests(unittest.TestCase):
         self.assertTrue(hasattr(window, "folder_edit"))
         self.assertTrue(hasattr(window, "table"))
         self.assertTrue(hasattr(window, "viewer"))
+        window.close()
+
+    def test_context_menu_selects_the_whole_clicked_row(self):
+        window = StudioWindow()
+        window.mappings.insert(0, WorksheetMapping("a.xlsx", "A", "b.xlsx", "B"))
+        window.refresh_table()
+        window.table.selectRow(0)
+        window.select_row_for_context_menu(1)
+        self.assertEqual(window.selected_rows(), [1])
+        self.assertEqual(len(window.table.selectionModel().selectedRows()), 1)
         window.close()
 
     def test_module_imports_when_tkinter_is_unavailable(self):
@@ -79,6 +91,49 @@ assert "tkinter" in sys.modules
             self.assertEqual(rows[0].target_sheet, "GFX010_报表")
             self.assertEqual(rows[0].source_cells, [])
             self.assertEqual(rows[0].target_cells, [])
+
+    def test_bank_report_code_conversion(self):
+        self.assertEqual(target_code_for_source_name("GFX010"), "01")
+        self.assertEqual(target_code_for_source_name("GFX011"), "0101")
+        self.assertEqual(target_code_for_source_name("SFX631"), "6301")
+        self.assertEqual(target_code_for_source_name("SFX700"), "70")
+
+    def test_target_sheet_prefers_report_code_convention(self):
+        sheets = ["汇总", "GFX0101_昆山分行_20260630", "GFX011_旧表"]
+        self.assertEqual(
+            preferred_target_sheet("GFX011", sheets),
+            "GFX0101_昆山分行_20260630",
+        )
+
+    def test_new_mapping_workbook_round_trip_has_no_use_column(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder); path = root / "映射关系.xlsx"
+            mapping = WorksheetMapping(
+                str(root / "来源.xlsx"), "数据", str(root / "目标.xlsx"), "报表",
+                ["A2", "A1"], ["B1", "B2"],
+            )
+            save_studio_mapping_workbook(path, [mapping], root)
+            book = __import__("openpyxl").load_workbook(path, data_only=True)
+            self.assertEqual(tuple(cell.value for cell in book["工作表对应"][1]), SHEET_PAIR_HEADERS)
+            self.assertEqual(tuple(cell.value for cell in book["单元格映射"][1]), CELL_PAIR_HEADERS)
+            self.assertNotIn("使用", tuple(cell.value for cell in book["工作表对应"][1]))
+            book.close()
+            loaded = load_studio_mapping_workbook(path)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].source_cells, ["A2", "A1"])
+            self.assertEqual(loaded[0].target_cells, ["B1", "B2"])
+
+    def test_new_sheet_only_mapping_workbook_round_trip(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder); path = root / "工作表关系.xlsx"
+            mapping = WorksheetMapping(
+                str(root / "来源.xlsx"), "数据", str(root / "目标.xlsx"), "报表"
+            )
+            save_studio_mapping_workbook(path, [mapping], root)
+            loaded = load_studio_mapping_workbook(path)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].source_cells, [])
+            self.assertEqual(loaded[0].target_cells, [])
 
     def test_manual_selection_is_the_only_saved_rule(self):
         row = WorksheetMapping(

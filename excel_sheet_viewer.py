@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QAbstractTableModel, QItemSelectionModel, QModelIndex, QSignalBlocker,
+    QAbstractTableModel, QEvent, QItemSelectionModel, QModelIndex, QSignalBlocker,
     Qt, Signal,
 )
 from PySide6.QtGui import QAction, QBrush, QColor, QPainter, QPalette, QPen
@@ -147,13 +147,29 @@ class SheetViewPane(QFrame):
         self.title_text = title
         self.model: WorksheetModel | None = None
         self.zoom = 100
+        self.use_click_order = False
+        self._manual_order: list[str] = []
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(7)
+        heading_line = QHBoxLayout()
         self.heading = QLabel(title)
         self.heading.setObjectName("sheetPaneTitle")
         self.heading.setWordWrap(True)
-        root.addWidget(self.heading)
+        heading_line.addWidget(self.heading)
+        heading_line.addStretch(1)
+        heading_line.addWidget(QLabel("缩放"))
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(40, 180)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setMinimumWidth(150)
+        self.zoom_slider.setMaximumWidth(310)
+        self.zoom_slider.valueChanged.connect(self.set_zoom)
+        heading_line.addWidget(self.zoom_slider, 1)
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(42)
+        heading_line.addWidget(self.zoom_label)
+        root.addLayout(heading_line)
 
         tools = QHBoxLayout()
         self.tools_layout = tools
@@ -185,22 +201,6 @@ class SheetViewPane(QFrame):
         tools.addWidget(clear)
         root.addLayout(tools)
 
-        self.zoom_widget = QWidget()
-        zoom_line = QHBoxLayout(self.zoom_widget)
-        zoom_line.setContentsMargins(0, 0, 0, 0)
-        fit = QPushButton("适应宽度")
-        fit.clicked.connect(self.fit_window)
-        zoom_line.addWidget(fit)
-        zoom_line.addWidget(QLabel("缩放"))
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(40, 180)
-        self.zoom_slider.setValue(100)
-        self.zoom_slider.valueChanged.connect(self.set_zoom)
-        zoom_line.addWidget(self.zoom_slider, 1)
-        self.zoom_label = QLabel("100%")
-        zoom_line.addWidget(self.zoom_label)
-        root.addWidget(self.zoom_widget)
-
         self.table = QTableView()
         self.table.setItemDelegate(RedOutlineDelegate(self.table))
         # The delegate draws the only selection indicator. Prevent the native
@@ -222,7 +222,21 @@ class SheetViewPane(QFrame):
         self.table.setAlternatingRowColors(False)
         self.table.horizontalHeader().setDefaultSectionSize(105)
         self.table.verticalHeader().setDefaultSectionSize(28)
+        self.table.clicked.connect(self._record_clicked_cell)
+        self.table.viewport().installEventFilter(self)
         root.addWidget(self.table, 1)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                delta = event.angleDelta().y()
+                if delta:
+                    self.zoom_slider.setValue(
+                        self.zoom_slider.value() + (5 if delta > 0 else -5)
+                    )
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
 
     def load_sheet(self, path: Path, sheet_name: str) -> None:
         if self.model:
@@ -244,17 +258,41 @@ class SheetViewPane(QFrame):
     def selected_addresses(self) -> list[str]:
         if not self.table.selectionModel():
             return []
-        indexes = sorted(
-            self.table.selectionModel().selectedIndexes(),
-            key=lambda item: (item.column(), item.row()),
-        )
-        return [address_for(item.row(), item.column()) for item in indexes]
+        indexes = self.table.selectionModel().selectedIndexes()
+        selected = {address_for(item.row(), item.column()) for item in indexes}
+        if self.use_click_order:
+            ordered = [address for address in self._manual_order if address in selected]
+            missing = sorted(selected - set(ordered), key=self._address_sort_key)
+            return ordered + missing
+        return sorted(selected, key=self._address_sort_key)
+
+    @staticmethod
+    def _address_sort_key(address: str) -> tuple[int, int]:
+        from excel_mapper import split_address
+        row, column = split_address(address)
+        return row, column
+
+    def _record_clicked_cell(self, index: QModelIndex) -> None:
+        if not self.use_click_order or not self.table.selectionModel():
+            return
+        address = address_for(index.row(), index.column())
+        selected = index in self.table.selectionModel().selectedIndexes()
+        if selected and address not in self._manual_order:
+            self._manual_order.append(address)
+        elif not selected and address in self._manual_order:
+            self._manual_order.remove(address)
+        self.selection_changed.emit(self.selected_addresses())
+
+    def set_click_order(self, enabled: bool) -> None:
+        self.use_click_order = enabled
+        self._manual_order = self.selected_addresses()
 
     def selected_text(self) -> str:
         return format_cell_addresses(self.selected_addresses())
 
     def clear_selection(self) -> None:
         self.table.clearSelection()
+        self._manual_order.clear()
         for button in self.trait_buttons.values():
             with QSignalBlocker(button):
                 button.setChecked(False)
@@ -279,6 +317,7 @@ class SheetViewPane(QFrame):
         from excel_mapper import split_address
         if clear:
             self.table.clearSelection()
+            self._manual_order.clear()
         selection = self.table.selectionModel()
         for address in addresses:
             try:
@@ -286,6 +325,9 @@ class SheetViewPane(QFrame):
             except ValueError:
                 continue
             if row < self.model.rows and column < self.model.columns:
+                normalized = address_for(row, column)
+                if normalized not in self._manual_order:
+                    self._manual_order.append(normalized)
                 selection.select(
                     self.model.index(row, column),
                     QItemSelectionModel.SelectionFlag.Select,
@@ -355,8 +397,6 @@ class DualSheetViewer(QWidget):
         panes = QHBoxLayout()
         self.source = SheetViewPane("来源数据")
         self.target = SheetViewPane("要填写的报表")
-        self.source.zoom_widget.hide()
-        self.target.zoom_widget.hide()
         panes.addWidget(self.source, 1)
         panes.addWidget(self.target, 1)
         root.addLayout(panes, 1)
@@ -413,10 +453,8 @@ class DualSheetViewer(QWidget):
             self.target.zoom_slider.setValue(self.source.zoom_slider.value())
         else:
             self.target.fit_window()
-        self.zoom_slider.setValue(self.source.zoom_slider.value())
 
     def set_zoom(self, value: int) -> None:
-        self.zoom_label.setText(f"{value}%")
         self.source.zoom_slider.setValue(value)
         if self.link_zoom.isChecked():
             self.target.zoom_slider.setValue(value)
