@@ -302,6 +302,12 @@ def _label_score(source: LabelCell, target: LabelCell, aliases: dict[str, str]) 
 
 
 def match_pair(pair: SheetPair, aliases: dict[str, str] | None = None) -> list[SmartMatch]:
+    """Match non-empty source cells to unique target cells across a sheet pair.
+
+    Candidate selection used to be independent for every source cell, which
+    allowed several similar labels to claim the same target address. Build all
+    candidates first and assign the strongest pairs globally instead.
+    """
     aliases = aliases or {}
     source_reader = WorkbookReader(Path(pair.source_file))
     target_reader = WorkbookReader(Path(pair.target_file))
@@ -311,34 +317,64 @@ def match_pair(pair: SheetPair, aliases: dict[str, str] | None = None) -> list[S
         pair.source_structure, pair.target_structure = source_structure, target_structure
         sources = build_label_index(source_reader, pair.source_sheet, source_structure)
         targets = build_label_index(target_reader, pair.target_sheet, target_structure)
-        target_by_key: dict[tuple[str, str], list[LabelCell]] = {}
-        for target in targets:
-            key = (_path_key(target.row_path, aliases), _path_key(target.column_path, aliases))
-            target_by_key.setdefault(key, []).append(target)
+        usable_sources = [
+            source for source in sources
+            if not source.formula and source.value not in (None, "")
+        ]
+        ranked_by_source: list[list[tuple[float, LabelCell]]] = []
+        proposals: list[tuple[float, float, int, LabelCell]] = []
+        for source_index, source in enumerate(usable_sources):
+            ranked = sorted(
+                ((_label_score(source, target, aliases), target) for target in targets),
+                key=lambda item: (-item[0], item[1].address),
+            )
+            ranked_by_source.append(ranked)
+            for candidate_index, (score, target) in enumerate(ranked):
+                next_score = ranked[candidate_index + 1][0] if candidate_index + 1 < len(ranked) else 0.0
+                margin = score - next_score
+                exact = (
+                    _path_key(source.row_path, aliases) == _path_key(target.row_path, aliases)
+                    and _path_key(source.column_path, aliases) == _path_key(target.column_path, aliases)
+                )
+                priority = 2.0 if exact else 1.0
+                proposals.append((priority + score, margin, source_index, target))
+
+        assigned: dict[int, tuple[LabelCell, float, str]] = {}
+        used_targets: set[str] = set()
+        for _priority_score, _margin_hint, source_index, target in sorted(
+            proposals,
+            key=lambda item: (-item[0], -item[1], item[2], item[3].address),
+        ):
+            if source_index in assigned or target.address in used_targets:
+                continue
+            source = usable_sources[source_index]
+            score = _label_score(source, target, aliases)
+            ranked = ranked_by_source[source_index]
+            alternative_scores = [
+                candidate_score
+                for candidate_score, candidate in ranked
+                if candidate.address not in used_targets and candidate.address != target.address
+            ]
+            margin = score - (alternative_scores[0] if alternative_scores else 0.0)
+            exact = (
+                _path_key(source.row_path, aliases) == _path_key(target.row_path, aliases)
+                and _path_key(source.column_path, aliases) == _path_key(target.column_path, aliases)
+            )
+            if exact:
+                status = "自动匹配"
+            elif score >= 0.92 and margin >= 0.04:
+                status = "相似匹配"
+            elif score >= 0.45:
+                status = "待确认"
+            else:
+                continue
+            assigned[source_index] = (target, score, status)
+            used_targets.add(target.address)
 
         matches: list[SmartMatch] = []
-        for source in sources:
-            if source.formula or source.value in (None, ""):
-                continue
-            exact = target_by_key.get(
-                (_path_key(source.row_path, aliases), _path_key(source.column_path, aliases)),
-                [],
-            )
-            candidate = exact[0] if len(exact) == 1 else None
-            score = 1.0 if candidate else 0.0
-            status = "自动匹配" if candidate else "未匹配"
-            if candidate is None and targets:
-                ranked = sorted(
-                    ((_label_score(source, target, aliases), target) for target in targets),
-                    key=lambda item: item[0],
-                    reverse=True,
-                )
-                best_score, best = ranked[0]
-                margin = best_score - (ranked[1][0] if len(ranked) > 1 else 0)
-                if best_score >= 0.92 and margin >= 0.04:
-                    candidate, score, status = best, best_score, "相似匹配"
-                elif best_score >= 0.45:
-                    candidate, score, status = best, best_score, "待确认"
+        for source_index, source in enumerate(usable_sources):
+            assignment = assigned.get(source_index)
+            candidate, score, status = assignment if assignment else (None, 0.0, "未匹配")
             matches.append(
                 SmartMatch(
                     pair.source_file,
@@ -631,4 +667,3 @@ def load_plan(path: Path) -> SmartTemplatePlan:
     raw["formula_rules"] = [FormulaRule(**item) for item in raw.get("formula_rules", [])]
     raw["block_rules"] = [BlockRule(**item) for item in raw.get("block_rules", [])]
     return SmartTemplatePlan(**raw)
-

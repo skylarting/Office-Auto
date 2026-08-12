@@ -8,7 +8,7 @@ from PySide6.QtCore import (
     QAbstractTableModel, QItemSelectionModel, QModelIndex, QSignalBlocker,
     Qt, Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton,
     QSlider, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
@@ -106,6 +106,16 @@ class RedOutlineDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         clean = QStyleOptionViewItem(option)
         clean.state &= ~QStyle.StateFlag.State_Selected
+        # Some platform styles still use Highlight after State_Selected is
+        # removed. Make both highlight brushes transparent while leaving the
+        # model's original BackgroundRole untouched.
+        clean.palette.setBrush(
+            QPalette.ColorRole.Highlight, QBrush(QColor(0, 0, 0, 0))
+        )
+        clean.palette.setBrush(
+            QPalette.ColorRole.HighlightedText,
+            clean.palette.brush(QPalette.ColorRole.Text),
+        )
         super().paint(painter, clean, index)
         if selected:
             painter.save()
@@ -132,6 +142,7 @@ class SheetViewPane(QFrame):
         root.addWidget(self.heading)
 
         tools = QHBoxLayout()
+        self.tools_layout = tools
         clear = QPushButton("取消全部")
         clear.clicked.connect(self.clear_selection)
         tools.addWidget(clear)
@@ -189,6 +200,12 @@ class SheetViewPane(QFrame):
             lambda *_: self.selection_changed.emit(self.selected_addresses())
         )
         self.set_zoom(self.zoom_slider.value())
+
+    def add_toolbar_button(self, text: str, callback) -> QPushButton:
+        button = QPushButton(text)
+        button.clicked.connect(callback)
+        self.tools_layout.insertWidget(2, button)
+        return button
 
     def selected_addresses(self) -> list[str]:
         if not self.table.selectionModel():
