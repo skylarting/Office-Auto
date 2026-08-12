@@ -995,13 +995,6 @@ class StudioWindow(QMainWindow):
         quit_action = file_menu.addAction("退出")
         quit_action.triggered.connect(self.close)
 
-        function_menu = self.menuBar().addMenu("功能")
-        mapping_action = function_menu.addAction("工作表数据映射")
-        mapping_action.setCheckable(True); mapping_action.setChecked(True)
-        summary_action = function_menu.addAction("工作表数据汇总（待接入）")
-        summary_action.setText("工作表数据汇总…")
-        summary_action.triggered.connect(self.open_summary_window)
-
         edit_menu = self.menuBar().addMenu("编辑")
         copy_action = edit_menu.addAction("复制选中关系")
         copy_action.setShortcut("Ctrl+C"); copy_action.triggered.connect(self.copy_selected_mappings)
@@ -1028,6 +1021,12 @@ class StudioWindow(QMainWindow):
         self.click_order_action = settings_menu.addAction("根据手动选中顺序一一对应")
         self.click_order_action.setCheckable(True); self.click_order_action.setChecked(False)
         self.click_order_action.toggled.connect(self.set_click_order_mode)
+
+        # Independent utilities live at the far right of the menu bar.  They
+        # open their own windows so both workflows can remain in use at once.
+        tools_menu = self.menuBar().addMenu("小工具")
+        summary_action = tools_menu.addAction("单元格汇总…")
+        summary_action.triggered.connect(self.open_summary_window)
 
     def set_click_order_mode(self, checked: bool) -> None:
         if hasattr(self, "viewer"):
@@ -1248,10 +1247,8 @@ class StudioWindow(QMainWindow):
         menu = QMenu(self)
         above = menu.addAction("在上方插入一组")
         below = menu.addAction("在下方插入一组")
-        copy_action = menu.addAction("复制选中关系")
+        copy_action = menu.addAction("复制到列表末尾")
         menu.addSeparator()
-        enable = menu.addAction("启用选中关系")
-        ignore = menu.addAction("暂时忽略选中关系")
         clear_cells = menu.addAction("清空单元格选择")
         menu.addSeparator(); delete = menu.addAction("删除选中关系")
         chosen = menu.exec(self.table.viewport().mapToGlobal(position))
@@ -1261,9 +1258,6 @@ class StudioWindow(QMainWindow):
             self.mappings.insert(row + 1, WorksheetMapping("", "", "", "")); self.refresh_table()
         elif chosen == copy_action:
             self.copy_selected_mappings()
-        elif chosen in (enable, ignore):
-            for index in self.selected_rows(): self.mappings[index].enabled = chosen == enable
-            self.refresh_table()
         elif chosen == clear_cells:
             self.clear_selected_cells()
         elif chosen == delete:
@@ -1505,14 +1499,14 @@ class StudioWindow(QMainWindow):
 def application_style() -> str:
     return """
     QMainWindow, QWidget { background: #F5F7FA; color: #1F2937; font-family: "Microsoft YaHei UI"; font-size: 14px; }
-    QLabel#pageTitle { font-size: 26px; font-weight: 600; color: #172B4D; }
+    QLabel#pageTitle { font-size: 21px; font-weight: 600; color: #172B4D; }
     QLabel#pageSubtitle, QLabel#secondaryText, QLabel#currentRelation { color: #667085; }
     QLabel#currentRelation { font-size: 14px; font-weight: 400; }
-    QLabel#sectionTitle, QLabel#dialogTitle, QLabel#sheetPaneTitle { font-size: 17px; font-weight: 600; color: #172B4D; }
+    QLabel#sectionTitle, QLabel#dialogTitle, QLabel#sheetPaneTitle { font-size: 15px; font-weight: 600; color: #172B4D; }
     QFrame#filePanel, QFrame#summaryPanel, QFrame#sheetPane { background: white; border: 1px solid #DDE3EC; border-radius: 9px; }
     QLineEdit, QComboBox, QListWidget, QTableWidget, QTableView { background: white; border: 1px solid #CBD5E1; border-radius: 5px; selection-background-color: #DCEAFF; selection-color: #172B4D; }
-    QPushButton { background: white; border: 1px solid #B8C2D1; border-radius: 6px; padding: 8px 14px; }
-    QPushButton#compactButton { padding: 5px 10px; min-height: 22px; }
+    QPushButton { background: white; border: 1px solid #B8C2D1; border-radius: 5px; padding: 5px 10px; }
+    QPushButton#compactButton { padding: 3px 8px; min-height: 20px; }
     QPushButton#squareButton { padding: 4px; min-width: 28px; max-width: 32px; min-height: 26px; }
     QToolButton { background: white; border: 1px solid #B8C2D1; border-radius: 5px; padding: 5px 10px; }
     QPushButton:hover { background: #F0F5FF; border-color: #7EA6E0; }

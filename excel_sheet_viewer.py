@@ -8,7 +8,7 @@ from PySide6.QtCore import (
     QAbstractTableModel, QEvent, QItemSelectionModel, QModelIndex, QSignalBlocker,
     Qt, Signal,
 )
-from PySide6.QtGui import QAction, QBrush, QColor, QPainter, QPalette, QPen
+from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QPainter, QPalette, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
     QSlider, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
@@ -35,7 +35,7 @@ class WorksheetModel(QAbstractTableModel):
         self.path = path
         self.sheet_name = sheet_name
         self.reader = WorkbookReader(path)
-        rows, columns = self.reader.used_dimensions(sheet_name)
+        rows, columns = self.reader.visible_dimensions(sheet_name)
         self.rows = max(rows, 1)
         self.columns = max(columns, 1)
         self._value_cache: dict[tuple[int, int], object] = {}
@@ -149,6 +149,9 @@ class SheetViewPane(QFrame):
         self.zoom = 100
         self.use_click_order = False
         self._manual_order: list[str] = []
+        self._selection_history: list[list[str]] = [[]]
+        self._restoring_selection = False
+        self._batching_selection = False
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(7)
@@ -230,6 +233,8 @@ class SheetViewPane(QFrame):
         self.table.verticalHeader().setDefaultSectionSize(28)
         self.table.clicked.connect(self._record_clicked_cell)
         self.table.viewport().installEventFilter(self)
+        self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self.table)
+        self.undo_shortcut.activated.connect(self.undo_selection)
         root.addWidget(self.table, 1)
 
     def eventFilter(self, watched, event) -> bool:
@@ -250,12 +255,8 @@ class SheetViewPane(QFrame):
         self.model = WorksheetModel(path, sheet_name, self)
         self.table.setModel(self.model)
         self.heading.setText(self.title_text)
-        self.table.selectionModel().selectionChanged.connect(
-            lambda *_: self.selection_changed.emit(self.selected_addresses())
-        )
-        self.table.selectionModel().selectionChanged.connect(
-            lambda *_: self.refresh_trait_states()
-        )
+        self._selection_history = [[]]
+        self.table.selectionModel().selectionChanged.connect(self._selection_updated)
         self.set_zoom(self.zoom_slider.value())
 
     def clear_sheet(self) -> None:
@@ -266,6 +267,7 @@ class SheetViewPane(QFrame):
         self.table.setModel(None)
         self.heading.setText(self.title_text)
         self._manual_order.clear()
+        self._selection_history = [[]]
         self.refresh_trait_states()
 
     def add_toolbar_button(self, text: str, callback) -> QPushButton:
@@ -310,8 +312,38 @@ class SheetViewPane(QFrame):
         return format_cell_addresses(self.selected_addresses())
 
     def clear_selection(self) -> None:
-        self.table.clearSelection()
-        self._manual_order.clear()
+        self._batching_selection = True
+        try:
+            self.table.clearSelection()
+            self._manual_order.clear()
+        finally:
+            self._batching_selection = False
+        self._selection_updated()
+
+    def _selection_updated(self, *_args) -> None:
+        addresses = self.selected_addresses()
+        if self._batching_selection:
+            return
+        if not self._restoring_selection and (
+            not self._selection_history or addresses != self._selection_history[-1]
+        ):
+            self._selection_history.append(addresses)
+            self._selection_history = self._selection_history[-100:]
+        self.selection_changed.emit(addresses)
+        self.refresh_trait_states()
+
+    def undo_selection(self) -> None:
+        """Undo the most recent cell-selection change (Ctrl+Z)."""
+        if len(self._selection_history) < 2:
+            return
+        self._selection_history.pop()
+        previous = list(self._selection_history[-1])
+        self._restoring_selection = True
+        try:
+            self.select_addresses(previous, clear=True)
+        finally:
+            self._restoring_selection = False
+        self.selection_changed.emit(self.selected_addresses())
         self.refresh_trait_states()
 
     def trait_state(self, trait: str) -> str:
@@ -358,33 +390,44 @@ class SheetViewPane(QFrame):
             QItemSelectionModel.SelectionFlag.Select
             if select else QItemSelectionModel.SelectionFlag.Deselect
         )
-        for row in range(self.model.rows):
-            for column in range(self.model.columns):
-                traits = self.model.traits_at(row, column)
-                if trait in traits:
-                    selection.select(self.model.index(row, column), flag)
+        self._batching_selection = True
+        try:
+            for row in range(self.model.rows):
+                for column in range(self.model.columns):
+                    traits = self.model.traits_at(row, column)
+                    if trait in traits:
+                        selection.select(self.model.index(row, column), flag)
+        finally:
+            self._batching_selection = False
+        self._selection_updated()
 
     def select_addresses(self, addresses: list[str], clear: bool = True) -> None:
         if not self.model or not self.table.selectionModel():
             return
         from excel_mapper import split_address
-        if clear:
-            self.table.clearSelection()
-            self._manual_order.clear()
-        selection = self.table.selectionModel()
-        for address in addresses:
-            try:
-                row, column = split_address(address)
-            except ValueError:
-                continue
-            if row < self.model.rows and column < self.model.columns:
-                normalized = address_for(row, column)
-                if normalized not in self._manual_order:
-                    self._manual_order.append(normalized)
-                selection.select(
-                    self.model.index(row, column),
-                    QItemSelectionModel.SelectionFlag.Select,
-                )
+        self._batching_selection = True
+        try:
+            if clear:
+                self.table.clearSelection()
+                self._manual_order.clear()
+            selection = self.table.selectionModel()
+            for address in addresses:
+                try:
+                    row, column = split_address(address)
+                except ValueError:
+                    continue
+                if row < self.model.rows and column < self.model.columns:
+                    normalized = address_for(row, column)
+                    if normalized not in self._manual_order:
+                        self._manual_order.append(normalized)
+                    selection.select(
+                        self.model.index(row, column),
+                        QItemSelectionModel.SelectionFlag.Select,
+                    )
+        finally:
+            self._batching_selection = False
+        if not self._restoring_selection:
+            self._selection_updated()
 
     def scroll_to_address(self, address: str) -> None:
         if not self.model:

@@ -282,6 +282,38 @@ class WorkbookReader:
         sheet = self.format_book[sheet_name]
         return sheet.max_row, sheet.max_column
 
+    def visible_dimensions(self, sheet_name: str) -> tuple[int, int]:
+        """Return the last cell that contains data or a visible fill.
+
+        Excel's max_column/max_row also includes stale formatting, which can
+        make a small form appear to extend to dozens of empty columns.
+        """
+        if self.is_xls:
+            sheet = self.xls_book.sheet_by_name(sheet_name)
+            last_row = last_column = 0
+            for row in range(sheet.nrows):
+                for column in range(sheet.ncols):
+                    cell = sheet.cell(row, column)
+                    xf = self.xls_book.xf_list[cell.xf_index]
+                    if cell.ctype not in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK) or xf.background.fill_pattern:
+                        last_row = max(last_row, row + 1)
+                        last_column = max(last_column, column + 1)
+            return max(last_row, 1), max(last_column, 1)
+        value_sheet = self.value_book[sheet_name]
+        format_sheet = self.format_book[sheet_name]
+        last_row = last_column = 0
+        coordinates = set(value_sheet._cells) | set(format_sheet._cells)
+        for row, column in coordinates:
+            value_cell = value_sheet._cells.get((row, column))
+            format_cell = format_sheet._cells.get((row, column))
+            value = value_cell.value if value_cell is not None else None
+            formula = format_cell.value if format_cell is not None else None
+            has_fill = bool(format_cell is not None and format_cell.fill.fill_type)
+            if value not in (None, "") or formula not in (None, "") or has_fill:
+                last_row = max(last_row, row)
+                last_column = max(last_column, column)
+        return max(last_row, 1), max(last_column, 1)
+
     @staticmethod
     def _apply_tint(rgb: str, tint: float) -> str:
         channels = [int(rgb[index:index + 2], 16) for index in (0, 2, 4)]

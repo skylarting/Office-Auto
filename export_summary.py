@@ -257,11 +257,13 @@ def format_summary_sheet(
     addresses: list[str],
     records: list[SummaryRecord],
     include_file_name: bool,
+    value_headers: list[str] | None = None,
 ) -> None:
+    value_headers = value_headers or addresses
     headers = (
-        ["文件名称", "Sheet名称", *addresses]
+        ["文件名称", "Sheet名称", *value_headers]
         if include_file_name
-        else ["Sheet名称", *addresses]
+        else ["Sheet名称", *value_headers]
     )
     sheet.append(headers)
 
@@ -323,6 +325,8 @@ def create_new_summary_workbook(
     summary_name: str,
     progress: Callable[[int, int, str], None] | None = None,
     included_sheets: set[str] | None = None,
+    included_sheets_by_file: dict[str, set[str]] | None = None,
+    value_headers: list[str] | None = None,
 ) -> None:
     all_records: list[SummaryRecord] = []
     total = len(source_files)
@@ -330,7 +334,10 @@ def create_new_summary_workbook(
     for index, source_path in enumerate(source_files, start=1):
         if progress:
             progress(index - 1, total, f"正在读取：{source_path.name}")
-        all_records.extend(read_records(source_path, addresses, summary_name, included_sheets))
+        selected = included_sheets
+        if included_sheets_by_file is not None:
+            selected = included_sheets_by_file.get(str(source_path.resolve()), set())
+        all_records.extend(read_records(source_path, addresses, summary_name, selected))
 
     output_book = Workbook()
     output_sheet = output_book.active
@@ -340,6 +347,7 @@ def create_new_summary_workbook(
         addresses,
         all_records,
         include_file_name=len(source_files) > 1,
+        value_headers=value_headers,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_book.save(output_path)
@@ -407,8 +415,10 @@ def create_summary_copy(
     addresses: list[str],
     summary_name: str,
     output_path: Path,
+    included_sheets: set[str] | None = None,
+    value_headers: list[str] | None = None,
 ) -> Path:
-    records = read_records(source_path, addresses, summary_name)
+    records = read_records(source_path, addresses, summary_name, included_sheets)
     if source_path.suffix.lower() == ".xls":
         workbook = copy_xls_to_xlsx(source_path)
     else:
@@ -422,6 +432,7 @@ def create_summary_copy(
         addresses,
         records,
         include_file_name=False,
+        value_headers=value_headers,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
@@ -435,6 +446,8 @@ def create_summary_copies(
     summary_name: str,
     output_target: Path,
     progress: Callable[[int, int, str], None] | None = None,
+    included_sheets_by_file: dict[str, set[str]] | None = None,
+    value_headers: list[str] | None = None,
 ) -> list[Path]:
     total = len(source_files)
     output_paths: list[Path] = []
@@ -446,17 +459,15 @@ def create_summary_copies(
             if source_path.suffix.lower() == ".xls"
             else source_path.name
         )
-        proposed = (
-            output_target / copy_name
-            if len(source_files) > 1
-            else output_target
-        )
+        proposed = output_target / copy_name if output_target.is_dir() or not output_target.suffix else output_target
         output_path = unique_output_path(proposed)
         create_summary_copy(
             source_path,
             addresses,
             summary_name,
             output_path,
+            None if included_sheets_by_file is None else included_sheets_by_file.get(str(source_path.resolve()), set()),
+            value_headers,
         )
         output_paths.append(output_path)
         if progress:
